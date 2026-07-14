@@ -57,6 +57,8 @@ public final class DrawerWidget {
             "io.github.tomppi.drawerwidget.action.PREVIOUS";
     private static final String ACTION_NEXT =
             "io.github.tomppi.drawerwidget.action.NEXT";
+    private static final String ACTION_LAUNCH =
+            "io.github.tomppi.drawerwidget.action.LAUNCH";
 
     private DrawerWidget() {}
 
@@ -108,6 +110,29 @@ public final class DrawerWidget {
         @Override
         public void onReceive(Context context, Intent intent) {
             refreshAllWidgets(context);
+        }
+    }
+
+    /**
+     * Receives collection-item clicks and launches the target activity directly.
+     *
+     * Using a broadcast PendingIntent template avoids creating any activity/task owned by the
+     * widget app. The launched app therefore owns its own task and Recents card.
+     */
+    public static final class LaunchReceiver extends BroadcastReceiver {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (!ACTION_LAUNCH.equals(intent.getAction())) {
+                return;
+            }
+
+            String flattened = intent.getStringExtra(EXTRA_COMPONENT);
+            ComponentName component = flattened == null
+                    ? null
+                    : ComponentName.unflattenFromString(flattened);
+            if (component != null) {
+                launchComponent(context, component);
+            }
         }
     }
 
@@ -169,7 +194,8 @@ public final class DrawerWidget {
                 }
             }
 
-            int pageCount = Math.max(1,
+            int pageCount = Math.max(
+                    1,
                     (favorites.size() + FAVORITES_PER_PAGE - 1) / FAVORITES_PER_PAGE);
             int page = currentPage(context, appWidgetId, pageCount);
             int start = page * FAVORITES_PER_PAGE;
@@ -204,8 +230,8 @@ public final class DrawerWidget {
 
             Intent fillIn = new Intent();
             fillIn.putExtra(EXTRA_COMPONENT, entry.component.flattenToString());
-            fillIn.setData(Uri.parse("drawer-widget://launch/" + Uri.encode(
-                    entry.component.flattenToString())));
+            fillIn.setData(Uri.parse(
+                    "drawer-widget://launch/" + Uri.encode(entry.component.flattenToString())));
             views.setOnClickFillInIntent(R.id.app_item_root, fillIn);
             return views;
         }
@@ -228,21 +254,6 @@ public final class DrawerWidget {
         @Override
         public boolean hasStableIds() {
             return true;
-        }
-    }
-
-    public static final class LaunchActivity extends Activity {
-        @Override
-        protected void onCreate(Bundle savedInstanceState) {
-            super.onCreate(savedInstanceState);
-            String flattened = getIntent().getStringExtra(EXTRA_COMPONENT);
-            ComponentName component = flattened == null
-                    ? null
-                    : ComponentName.unflattenFromString(flattened);
-            if (component != null) {
-                launchComponent(this, component);
-            }
-            finish();
         }
     }
 
@@ -283,7 +294,7 @@ public final class DrawerWidget {
             grid.setAdapter(adapter);
             grid.setOnItemClickListener((parent, view, position, id) -> {
                 launchComponent(this, shownApps.get(position).component);
-                finish();
+                finishAndRemoveTask();
             });
 
             search.addTextChangedListener(new TextWatcher() {
@@ -435,8 +446,7 @@ public final class DrawerWidget {
             allApps.addAll(loadApps(this));
             List<String> labels = new ArrayList<>();
             Set<String> existing = new LinkedHashSet<>(loadFavoriteComponents(this));
-            for (int i = 0; i < allApps.size(); i++) {
-                AppEntry app = allApps.get(i);
+            for (AppEntry app : allApps) {
                 labels.add(app.label);
             }
             listView.setAdapter(new ArrayAdapter<>(
@@ -568,7 +578,11 @@ public final class DrawerWidget {
                 row = new LinearLayout(context);
                 row.setOrientation(LinearLayout.HORIZONTAL);
                 row.setGravity(Gravity.CENTER_VERTICAL);
-                row.setPadding(dp(context, 12), dp(context, 4), dp(context, 12), dp(context, 4));
+                row.setPadding(
+                        dp(context, 12),
+                        dp(context, 4),
+                        dp(context, 12),
+                        dp(context, 4));
                 icon = new ImageView(context);
                 label = new TextView(context);
                 label.setTextColor(0xFFFFFFFF);
@@ -601,7 +615,10 @@ public final class DrawerWidget {
         }
     }
 
-    private static void updateWidget(Context context, AppWidgetManager manager, int appWidgetId) {
+    private static void updateWidget(
+            Context context,
+            AppWidgetManager manager,
+            int appWidgetId) {
         RemoteViews views = new RemoteViews(context.getPackageName(), R.layout.widget_drawer);
 
         Intent allAppsIntent = new Intent(context, AllAppsService.class);
@@ -615,9 +632,10 @@ public final class DrawerWidget {
         views.setRemoteAdapter(R.id.favorites_grid, favoritesIntent);
         views.setEmptyView(R.id.favorites_grid, R.id.empty_favorites);
 
-        Intent launchIntent = new Intent(context, LaunchActivity.class);
+        Intent launchIntent = new Intent(context, LaunchReceiver.class);
+        launchIntent.setAction(ACTION_LAUNCH);
         launchIntent.setData(Uri.parse("drawer-widget://template/" + appWidgetId));
-        PendingIntent launchTemplate = PendingIntent.getActivity(
+        PendingIntent launchTemplate = PendingIntent.getBroadcast(
                 context,
                 appWidgetId * 10,
                 launchIntent,
@@ -776,11 +794,14 @@ public final class DrawerWidget {
                     info.activityInfo.packageName,
                     info.activityInfo.name);
             String flattened = component.flattenToString();
-            if (!seen.add(flattened) || context.getPackageName().equals(component.getPackageName())) {
+            if (!seen.add(flattened)
+                    || context.getPackageName().equals(component.getPackageName())) {
                 continue;
             }
             CharSequence loadedLabel = info.loadLabel(packageManager);
-            String label = loadedLabel == null ? component.getShortClassName() : loadedLabel.toString();
+            String label = loadedLabel == null
+                    ? component.getShortClassName()
+                    : loadedLabel.toString();
             Drawable icon = info.loadIcon(packageManager);
             apps.add(new AppEntry(component, label, icon));
         }
@@ -790,7 +811,8 @@ public final class DrawerWidget {
             int labelResult = collator.compare(left.label, right.label);
             return labelResult != 0
                     ? labelResult
-                    : left.component.flattenToString().compareTo(right.component.flattenToString());
+                    : left.component.flattenToString().compareTo(
+                            right.component.flattenToString());
         });
         return apps;
     }
@@ -807,9 +829,9 @@ public final class DrawerWidget {
     private static void launchComponent(Context context, ComponentName component) {
         try {
             Intent intent = Intent.makeMainActivity(component);
-            if (!(context instanceof Activity)) {
-                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            }
+            intent.addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK
+                            | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
             context.startActivity(intent);
         } catch (ActivityNotFoundException | SecurityException error) {
             Toast.makeText(context, "Unable to open app", Toast.LENGTH_SHORT).show();
@@ -820,7 +842,11 @@ public final class DrawerWidget {
         LinearLayout root = new LinearLayout(context);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(0xFF202020);
-        root.setPadding(dp(context, 12), dp(context, 12), dp(context, 12), dp(context, 12));
+        root.setPadding(
+                dp(context, 12),
+                dp(context, 12),
+                dp(context, 12),
+                dp(context, 12));
         return root;
     }
 
@@ -845,7 +871,10 @@ public final class DrawerWidget {
     }
 
     private static LinearLayout.LayoutParams weightedButtonParams() {
-        return new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f);
+        return new LinearLayout.LayoutParams(
+                0,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                1f);
     }
 
     private static int dp(Context context, int value) {
