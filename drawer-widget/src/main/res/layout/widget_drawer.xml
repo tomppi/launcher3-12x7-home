@@ -48,12 +48,15 @@
         android:stretchMode="columnWidth"
         android:verticalSpacing="0dp" />
 
-    <View
+    <!-- RemoteViews only permits a restricted set of safe view classes. A plain <View>
+         here caused Launcher3 to reject the complete widget layout. -->
+    <TextView
         android:layout_width="match_parent"
         android:layout_height="1dp"
         android:layout_marginTop="4dp"
         android:layout_marginBottom="4dp"
-        android:background="#4A4A4A" />
+        android:background="#4A4A4A"
+        android:text="" />
 
     <LinearLayout
         android:layout_width="match_parent"
