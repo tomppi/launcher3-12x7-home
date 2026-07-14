@@ -37,6 +37,11 @@
             </intent-filter>
         </receiver>
 
+        <!-- Collection item clicks are delivered here. No widget-owned activity or task is created. -->
+        <receiver
+            android:name=".DrawerWidget$LaunchReceiver"
+            android:exported="false" />
+
         <service
             android:name=".DrawerWidget$AllAppsService"
             android:exported="false"
@@ -49,25 +54,20 @@
 
         <activity
             android:name=".DrawerWidget$SearchActivity"
-            android:exported="false" />
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:taskAffinity="" />
 
         <activity
             android:name=".DrawerWidget$FavoritesActivity"
-            android:exported="false" />
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:taskAffinity="" />
 
         <activity
             android:name=".DrawerWidget$AddFavoritesActivity"
-            android:exported="false" />
-
-        <!-- Collection widgets require one PendingIntent template. This no-display trampoline
-             immediately starts the selected app but never owns a visible task or Recents entry. -->
-        <activity
-            android:name=".DrawerWidget$LaunchActivity"
             android:excludeFromRecents="true"
             android:exported="false"
-            android:finishOnTaskLaunch="true"
-            android:noHistory="true"
-            android:taskAffinity=""
-            android:theme="@android:style/Theme.NoDisplay" />
+            android:taskAffinity="" />
     </application>
 </manifest>
