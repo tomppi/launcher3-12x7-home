@@ -92,7 +92,8 @@
             android:layout_height="152dp"
             android:animateFirstView="false"
             android:clickable="true"
-            android:focusable="true" />
+            android:focusable="true"
+            android:loopViews="true" />
 
         <TextView
             android:id="@+id/empty_favorites"
