@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/favorites_touch_area"
     android:layout_width="match_parent"
     android:layout_height="228dp"
     android:orientation="vertical">
@@ -38,7 +39,6 @@
                 android:textColor="#F2F2F2"
                 android:textSize="10sp" />
         </LinearLayout>
-
         <LinearLayout
             android:id="@+id/favorite_slot_1"
             android:layout_width="0dp"
@@ -68,7 +68,6 @@
                 android:textColor="#F2F2F2"
                 android:textSize="10sp" />
         </LinearLayout>
-
         <LinearLayout
             android:id="@+id/favorite_slot_2"
             android:layout_width="0dp"
@@ -98,7 +97,6 @@
                 android:textColor="#F2F2F2"
                 android:textSize="10sp" />
         </LinearLayout>
-
         <LinearLayout
             android:id="@+id/favorite_slot_3"
             android:layout_width="0dp"
@@ -128,7 +126,6 @@
                 android:textColor="#F2F2F2"
                 android:textSize="10sp" />
         </LinearLayout>
-
         <LinearLayout
             android:id="@+id/favorite_slot_4"
             android:layout_width="0dp"
@@ -158,7 +155,6 @@
                 android:textColor="#F2F2F2"
                 android:textSize="10sp" />
         </LinearLayout>
-
         <LinearLayout
             android:id="@+id/favorite_slot_5"
             android:layout_width="0dp"
@@ -224,7 +220,6 @@
                 android:textColor="#F2F2F2"
                 android:textSize="10sp" />
         </LinearLayout>
-
         <LinearLayout
             android:id="@+id/favorite_slot_7"
             android:layout_width="0dp"
@@ -254,7 +249,6 @@
                 android:textColor="#F2F2F2"
                 android:textSize="10sp" />
         </LinearLayout>
-
         <LinearLayout
             android:id="@+id/favorite_slot_8"
             android:layout_width="0dp"
@@ -284,7 +278,6 @@
                 android:textColor="#F2F2F2"
                 android:textSize="10sp" />
         </LinearLayout>
-
         <LinearLayout
             android:id="@+id/favorite_slot_9"
             android:layout_width="0dp"
@@ -314,7 +307,6 @@
                 android:textColor="#F2F2F2"
                 android:textSize="10sp" />
         </LinearLayout>
-
         <LinearLayout
             android:id="@+id/favorite_slot_10"
             android:layout_width="0dp"
@@ -344,7 +336,6 @@
                 android:textColor="#F2F2F2"
                 android:textSize="10sp" />
         </LinearLayout>
-
         <LinearLayout
             android:id="@+id/favorite_slot_11"
             android:layout_width="0dp"
@@ -410,7 +401,6 @@
                 android:textColor="#F2F2F2"
                 android:textSize="10sp" />
         </LinearLayout>
-
         <LinearLayout
             android:id="@+id/favorite_slot_13"
             android:layout_width="0dp"
@@ -440,7 +430,6 @@
                 android:textColor="#F2F2F2"
                 android:textSize="10sp" />
         </LinearLayout>
-
         <LinearLayout
             android:id="@+id/favorite_slot_14"
             android:layout_width="0dp"
@@ -470,7 +459,6 @@
                 android:textColor="#F2F2F2"
                 android:textSize="10sp" />
         </LinearLayout>
-
         <LinearLayout
             android:id="@+id/favorite_slot_15"
             android:layout_width="0dp"
@@ -500,7 +488,6 @@
                 android:textColor="#F2F2F2"
                 android:textSize="10sp" />
         </LinearLayout>
-
         <LinearLayout
             android:id="@+id/favorite_slot_16"
             android:layout_width="0dp"
@@ -530,7 +517,6 @@
                 android:textColor="#F2F2F2"
                 android:textSize="10sp" />
         </LinearLayout>
-
         <LinearLayout
             android:id="@+id/favorite_slot_17"
             android:layout_width="0dp"
