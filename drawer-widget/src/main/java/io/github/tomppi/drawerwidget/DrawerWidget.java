@@ -10,12 +10,15 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.ActivityInfo;
+import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.drawable.Drawable;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.text.Editable;
 import android.text.TextWatcher;
@@ -49,16 +52,26 @@ import java.util.Set;
 public final class DrawerWidget {
     private static final String PREFS = "drawer_widget";
     private static final String PREF_FAVORITES = "favorites";
-    private static final String PREF_PAGE_PREFIX = "page_";
-    private static final String EXTRA_COMPONENT = "component";
-    private static final int FAVORITES_PER_PAGE = 12;
+    private static final String PREF_FAVORITES_REVISION = "favorites_revision";
+    private static final String PREF_APPS_REVISION = "apps_revision";
 
-    private static final String ACTION_PREVIOUS =
-            "io.github.tomppi.drawerwidget.action.PREVIOUS";
-    private static final String ACTION_NEXT =
-            "io.github.tomppi.drawerwidget.action.NEXT";
+    private static final String EXTRA_COMPONENT = "component";
+    private static final String EXTRA_PACKAGE = "package";
+    private static final String EXTRA_LABEL = "label";
+
+    private static final int FAVORITES_PER_PAGE = 12;
+    private static final int FAVORITE_PAGE_CYCLES = 2000;
+
     private static final String ACTION_LAUNCH =
             "io.github.tomppi.drawerwidget.action.LAUNCH";
+    private static final String ACTION_FREEZE_LAUNCH =
+            "io.github.tomppi.drawerwidget.action.FREEZE_LAUNCH";
+
+    private static final String FREEZE_PACKAGE = "com.tomppi.freezeshortcuts";
+    private static final String FREEZE_PROXY =
+            "com.tomppi.freezeshortcuts.ProxyActivity";
+    private static final String FREEZE_EXTRA_PACKAGE = "target_package";
+    private static final String FREEZE_EXTRA_LABEL = "target_label";
 
     private DrawerWidget() {}
 
@@ -69,69 +82,47 @@ public final class DrawerWidget {
                 updateWidget(context, manager, appWidgetId);
             }
         }
-
-        @Override
-        public void onDeleted(Context context, int[] appWidgetIds) {
-            SharedPreferences.Editor editor = prefs(context).edit();
-            for (int appWidgetId : appWidgetIds) {
-                editor.remove(PREF_PAGE_PREFIX + appWidgetId);
-            }
-            editor.apply();
-        }
-
-        @Override
-        public void onReceive(Context context, Intent intent) {
-            super.onReceive(context, intent);
-            String action = intent.getAction();
-            if (!ACTION_PREVIOUS.equals(action) && !ACTION_NEXT.equals(action)) {
-                return;
-            }
-
-            int appWidgetId = intent.getIntExtra(
-                    AppWidgetManager.EXTRA_APPWIDGET_ID,
-                    AppWidgetManager.INVALID_APPWIDGET_ID);
-            if (appWidgetId == AppWidgetManager.INVALID_APPWIDGET_ID) {
-                return;
-            }
-
-            int pageCount = favoritePageCount(context);
-            int page = currentPage(context, appWidgetId, pageCount);
-            if (ACTION_PREVIOUS.equals(action)) {
-                page = Math.max(0, page - 1);
-            } else {
-                page = Math.min(pageCount - 1, page + 1);
-            }
-            prefs(context).edit().putInt(PREF_PAGE_PREFIX + appWidgetId, page).apply();
-            updateWidget(context, AppWidgetManager.getInstance(context), appWidgetId);
-        }
     }
 
     public static final class PackageReceiver extends BroadcastReceiver {
         @Override
         public void onReceive(Context context, Intent intent) {
+            prefs(context).edit()
+                    .putLong(PREF_APPS_REVISION, System.currentTimeMillis())
+                    .apply();
             refreshAllWidgets(context);
         }
     }
 
     /**
-     * Receives collection-item clicks and launches the target activity directly.
+     * Handles both normal app launches and Root Freeze Shortcut launches.
      *
-     * Using a broadcast PendingIntent template avoids creating any activity/task owned by the
-     * widget app. The launched app therefore owns its own task and Recents card.
+     * A broadcast PendingIntent is used so the drawer widget never becomes the base activity
+     * of the launched app's task or Recents card.
      */
     public static final class LaunchReceiver extends BroadcastReceiver {
         @Override
         public void onReceive(Context context, Intent intent) {
-            if (!ACTION_LAUNCH.equals(intent.getAction())) {
-                return;
-            }
-
+            String action = intent.getAction();
+            String packageName = intent.getStringExtra(EXTRA_PACKAGE);
+            String label = intent.getStringExtra(EXTRA_LABEL);
             String flattened = intent.getStringExtra(EXTRA_COMPONENT);
             ComponentName component = flattened == null
                     ? null
                     : ComponentName.unflattenFromString(flattened);
-            if (component != null) {
-                launchComponent(context, component);
+
+            if (!isValidPackageName(packageName)) {
+                return;
+            }
+
+            if (ACTION_FREEZE_LAUNCH.equals(action)
+                    || !isPackageEnabled(context, packageName)) {
+                launchWithRootFreeze(context, packageName, label);
+                return;
+            }
+
+            if (ACTION_LAUNCH.equals(action)) {
+                launchNormally(context, packageName, component);
             }
         }
     }
@@ -139,29 +130,23 @@ public final class DrawerWidget {
     public static final class AllAppsService extends RemoteViewsService {
         @Override
         public RemoteViewsFactory onGetViewFactory(Intent intent) {
-            return new AppsFactory(getApplicationContext(), false, intent);
+            return new AllAppsFactory(getApplicationContext());
         }
     }
 
-    public static final class FavoritesService extends RemoteViewsService {
+    public static final class FavoritesPagesService extends RemoteViewsService {
         @Override
         public RemoteViewsFactory onGetViewFactory(Intent intent) {
-            return new AppsFactory(getApplicationContext(), true, intent);
+            return new FavoritesPagesFactory(getApplicationContext());
         }
     }
 
-    private static final class AppsFactory implements RemoteViewsService.RemoteViewsFactory {
+    private static final class AllAppsFactory implements RemoteViewsService.RemoteViewsFactory {
         private final Context context;
-        private final boolean favoritesOnly;
-        private final int appWidgetId;
         private List<AppEntry> entries = new ArrayList<>();
 
-        AppsFactory(Context context, boolean favoritesOnly, Intent intent) {
+        AllAppsFactory(Context context) {
             this.context = context;
-            this.favoritesOnly = favoritesOnly;
-            this.appWidgetId = intent.getIntExtra(
-                    AppWidgetManager.EXTRA_APPWIDGET_ID,
-                    AppWidgetManager.INVALID_APPWIDGET_ID);
         }
 
         @Override
@@ -175,34 +160,7 @@ public final class DrawerWidget {
         }
 
         private void reload() {
-            List<AppEntry> allApps = loadApps(context);
-            if (!favoritesOnly) {
-                entries = allApps;
-                return;
-            }
-
-            Map<String, AppEntry> byComponent = new HashMap<>();
-            for (AppEntry app : allApps) {
-                byComponent.put(app.component.flattenToString(), app);
-            }
-
-            List<AppEntry> favorites = new ArrayList<>();
-            for (String component : loadFavoriteComponents(context)) {
-                AppEntry app = byComponent.get(component);
-                if (app != null) {
-                    favorites.add(app);
-                }
-            }
-
-            int pageCount = Math.max(
-                    1,
-                    (favorites.size() + FAVORITES_PER_PAGE - 1) / FAVORITES_PER_PAGE);
-            int page = currentPage(context, appWidgetId, pageCount);
-            int start = page * FAVORITES_PER_PAGE;
-            int end = Math.min(favorites.size(), start + FAVORITES_PER_PAGE);
-            entries = start < end
-                    ? new ArrayList<>(favorites.subList(start, end))
-                    : new ArrayList<>();
+            entries = loadApps(context);
         }
 
         @Override
@@ -220,20 +178,7 @@ public final class DrawerWidget {
             if (position < 0 || position >= entries.size()) {
                 return null;
             }
-
-            AppEntry entry = entries.get(position);
-            RemoteViews views = new RemoteViews(
-                    context.getPackageName(),
-                    R.layout.widget_app_item);
-            views.setTextViewText(R.id.app_label, entry.label);
-            views.setImageViewBitmap(R.id.app_icon, iconBitmap(context, entry.icon));
-
-            Intent fillIn = new Intent();
-            fillIn.putExtra(EXTRA_COMPONENT, entry.component.flattenToString());
-            fillIn.setData(Uri.parse(
-                    "drawer-widget://launch/" + Uri.encode(entry.component.flattenToString())));
-            views.setOnClickFillInIntent(R.id.app_item_root, fillIn);
-            return views;
+            return appItemViews(context, entries.get(position), R.layout.widget_app_item);
         }
 
         @Override
@@ -248,13 +193,145 @@ public final class DrawerWidget {
 
         @Override
         public long getItemId(int position) {
-            return entries.get(position).component.flattenToString().hashCode();
+            return position;
         }
 
         @Override
         public boolean hasStableIds() {
-            return true;
+            return false;
         }
+    }
+
+    /**
+     * Each StackView item is one complete 6x2 favorites page.
+     *
+     * The same real page set is repeated many times and the widget starts in the middle of the
+     * virtual range. Users can keep swiping without previous/next buttons or reaching an edge in
+     * normal use.
+     */
+    private static final class FavoritesPagesFactory
+            implements RemoteViewsService.RemoteViewsFactory {
+        private final Context context;
+        private List<AppEntry> favorites = new ArrayList<>();
+        private int realPageCount = 1;
+
+        FavoritesPagesFactory(Context context) {
+            this.context = context;
+        }
+
+        @Override
+        public void onCreate() {
+            reload();
+        }
+
+        @Override
+        public void onDataSetChanged() {
+            reload();
+        }
+
+        private void reload() {
+            Map<String, AppEntry> byComponent = appMap(context);
+            List<AppEntry> result = new ArrayList<>();
+            for (String component : loadFavoriteComponents(context)) {
+                AppEntry entry = byComponent.get(component);
+                if (entry != null) {
+                    result.add(entry);
+                }
+            }
+            favorites = result;
+            realPageCount = Math.max(
+                    1,
+                    (favorites.size() + FAVORITES_PER_PAGE - 1) / FAVORITES_PER_PAGE);
+        }
+
+        @Override
+        public void onDestroy() {
+            favorites.clear();
+        }
+
+        @Override
+        public int getCount() {
+            return realPageCount <= 1
+                    ? 1
+                    : realPageCount * FAVORITE_PAGE_CYCLES;
+        }
+
+        @Override
+        public RemoteViews getViewAt(int position) {
+            int page = realPageCount <= 1 ? 0 : Math.floorMod(position, realPageCount);
+            int start = page * FAVORITES_PER_PAGE;
+
+            RemoteViews pageViews = new RemoteViews(
+                    context.getPackageName(),
+                    R.layout.widget_favorites_page);
+
+            for (int slot = 0; slot < FAVORITES_PER_PAGE; slot++) {
+                RemoteViews child;
+                int index = start + slot;
+                if (index < favorites.size()) {
+                    child = appItemViews(
+                            context,
+                            favorites.get(index),
+                            R.layout.widget_favorite_item);
+                } else {
+                    child = new RemoteViews(
+                            context.getPackageName(),
+                            R.layout.widget_favorite_item);
+                    child.setViewVisibility(R.id.app_item_root, View.INVISIBLE);
+                }
+
+                pageViews.addView(
+                        slot < 6 ? R.id.favorites_row_one : R.id.favorites_row_two,
+                        child);
+            }
+            return pageViews;
+        }
+
+        @Override
+        public RemoteViews getLoadingView() {
+            return null;
+        }
+
+        @Override
+        public int getViewTypeCount() {
+            return 1;
+        }
+
+        @Override
+        public long getItemId(int position) {
+            return position;
+        }
+
+        @Override
+        public boolean hasStableIds() {
+            return false;
+        }
+    }
+
+    private static RemoteViews appItemViews(Context context, AppEntry entry, int layoutId) {
+        RemoteViews views = new RemoteViews(context.getPackageName(), layoutId);
+        views.setTextViewText(R.id.app_label, entry.label);
+        views.setImageViewBitmap(R.id.app_icon, iconBitmap(context, entry.icon));
+
+        views.setTextColor(
+                R.id.freeze_action,
+                entry.enabled ? 0xFFBDBDBD : 0xFF66D9FF);
+
+        Intent normal = itemIntent(ACTION_LAUNCH, entry);
+        views.setOnClickFillInIntent(R.id.app_item_content, normal);
+
+        Intent freeze = itemIntent(ACTION_FREEZE_LAUNCH, entry);
+        views.setOnClickFillInIntent(R.id.freeze_action, freeze);
+        return views;
+    }
+
+    private static Intent itemIntent(String action, AppEntry entry) {
+        Intent intent = new Intent();
+        intent.setAction(action);
+        intent.putExtra(EXTRA_PACKAGE, entry.packageName);
+        intent.putExtra(EXTRA_LABEL, entry.label);
+        intent.putExtra(EXTRA_COMPONENT, entry.component.flattenToString());
+        return intent;
     }
 
     public static final class SearchActivity extends Activity {
@@ -293,8 +370,19 @@ public final class DrawerWidget {
             adapter = new AppGridAdapter(this, shownApps);
             grid.setAdapter(adapter);
             grid.setOnItemClickListener((parent, view, position, id) -> {
-                launchComponent(this, shownApps.get(position).component);
+                AppEntry entry = shownApps.get(position);
+                if (entry.enabled) {
+                    launchNormally(this, entry.packageName, entry.component);
+                } else {
+                    launchWithRootFreeze(this, entry.packageName, entry.label);
+                }
                 finishAndRemoveTask();
+            });
+            grid.setOnItemLongClickListener((parent, view, position, id) -> {
+                AppEntry entry = shownApps.get(position);
+                launchWithRootFreeze(this, entry.packageName, entry.label);
+                finishAndRemoveTask();
+                return true;
             });
 
             search.addTextChangedListener(new TextWatcher() {
@@ -307,7 +395,8 @@ public final class DrawerWidget {
                     shownApps.clear();
                     for (AppEntry app : allApps) {
                         if (query.isEmpty()
-                                || app.label.toLowerCase(Locale.getDefault()).contains(query)) {
+                                || app.label.toLowerCase(Locale.getDefault()).contains(query)
+                                || app.packageName.toLowerCase(Locale.ROOT).contains(query)) {
                             shownApps.add(app);
                         }
                     }
@@ -334,6 +423,12 @@ public final class DrawerWidget {
 
             TextView title = titleView(this, "Favorite apps");
             root.addView(title);
+
+            TextView help = new TextView(this);
+            help.setText("Favorites swipe continuously in the widget. Use the snowflake on any app to launch it through Root Freeze Shortcuts.");
+            help.setTextColor(0xFFBDBDBD);
+            help.setPadding(dp(this, 8), 0, dp(this, 8), dp(this, 8));
+            root.addView(help);
 
             listView = new ListView(this);
             listView.setChoiceMode(ListView.CHOICE_MODE_SINGLE);
@@ -447,7 +542,7 @@ public final class DrawerWidget {
             List<String> labels = new ArrayList<>();
             Set<String> existing = new LinkedHashSet<>(loadFavoriteComponents(this));
             for (AppEntry app : allApps) {
-                labels.add(app.label);
+                labels.add(app.label + "\n" + app.packageName);
             }
             listView.setAdapter(new ArrayAdapter<>(
                     this,
@@ -504,7 +599,7 @@ public final class DrawerWidget {
 
         @Override
         public long getItemId(int position) {
-            return apps.get(position).component.flattenToString().hashCode();
+            return position;
         }
 
         @Override
@@ -536,6 +631,7 @@ public final class DrawerWidget {
             }
             AppEntry app = apps.get(position);
             icon.setImageDrawable(app.icon);
+            icon.setAlpha(app.enabled ? 1f : 0.55f);
             label.setText(app.label);
             return cell;
         }
@@ -562,7 +658,7 @@ public final class DrawerWidget {
 
         @Override
         public long getItemId(int position) {
-            return apps.get(position).component.flattenToString().hashCode();
+            return position;
         }
 
         @Override
@@ -598,20 +694,29 @@ public final class DrawerWidget {
             }
             AppEntry app = apps.get(position);
             icon.setImageDrawable(app.icon);
-            label.setText(app.label);
+            icon.setAlpha(app.enabled ? 1f : 0.55f);
+            label.setText(app.label + "\n" + app.packageName);
             return row;
         }
     }
 
     private static final class AppEntry {
         final ComponentName component;
+        final String packageName;
         final String label;
         final Drawable icon;
+        final boolean enabled;
 
-        AppEntry(ComponentName component, String label, Drawable icon) {
+        AppEntry(
+                ComponentName component,
+                String label,
+                Drawable icon,
+                boolean enabled) {
             this.component = component;
+            this.packageName = component.getPackageName();
             this.label = label;
             this.icon = icon;
+            this.enabled = enabled;
         }
     }
 
@@ -621,27 +726,8 @@ public final class DrawerWidget {
             int appWidgetId) {
         RemoteViews views = new RemoteViews(context.getPackageName(), R.layout.widget_drawer);
 
-        Intent allAppsIntent = new Intent(context, AllAppsService.class);
-        allAppsIntent.putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId);
-        allAppsIntent.setData(Uri.parse("drawer-widget://all/" + appWidgetId));
-        views.setRemoteAdapter(R.id.all_apps_grid, allAppsIntent);
-
-        Intent favoritesIntent = new Intent(context, FavoritesService.class);
-        favoritesIntent.putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId);
-        favoritesIntent.setData(Uri.parse("drawer-widget://favorites/" + appWidgetId));
-        views.setRemoteAdapter(R.id.favorites_grid, favoritesIntent);
-        views.setEmptyView(R.id.favorites_grid, R.id.empty_favorites);
-
-        Intent launchIntent = new Intent(context, LaunchReceiver.class);
-        launchIntent.setAction(ACTION_LAUNCH);
-        launchIntent.setData(Uri.parse("drawer-widget://template/" + appWidgetId));
-        PendingIntent launchTemplate = PendingIntent.getBroadcast(
-                context,
-                appWidgetId * 10,
-                launchIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_MUTABLE);
-        views.setPendingIntentTemplate(R.id.all_apps_grid, launchTemplate);
-        views.setPendingIntentTemplate(R.id.favorites_grid, launchTemplate);
+        bindAllApps(context, views, appWidgetId);
+        bindFavorites(context, views, appWidgetId);
 
         views.setOnClickPendingIntent(
                 R.id.search_bar,
@@ -649,24 +735,58 @@ public final class DrawerWidget {
         views.setOnClickPendingIntent(
                 R.id.edit_favorites,
                 activityPendingIntent(context, FavoritesActivity.class, appWidgetId * 10 + 2));
-        views.setOnClickPendingIntent(
-                R.id.favorites_previous,
-                pagePendingIntent(context, appWidgetId, ACTION_PREVIOUS, appWidgetId * 10 + 3));
-        views.setOnClickPendingIntent(
-                R.id.favorites_next,
-                pagePendingIntent(context, appWidgetId, ACTION_NEXT, appWidgetId * 10 + 4));
-
-        int pageCount = favoritePageCount(context);
-        int page = currentPage(context, appWidgetId, pageCount);
-        views.setTextViewText(R.id.favorites_page, pageIndicator(page, pageCount));
-        views.setTextColor(R.id.favorites_previous, page > 0 ? 0xFFFFFFFF : 0xFF777777);
-        views.setTextColor(
-                R.id.favorites_next,
-                page < pageCount - 1 ? 0xFFFFFFFF : 0xFF777777);
 
         manager.updateAppWidget(appWidgetId, views);
         manager.notifyAppWidgetViewDataChanged(appWidgetId, R.id.all_apps_grid);
-        manager.notifyAppWidgetViewDataChanged(appWidgetId, R.id.favorites_grid);
+        manager.notifyAppWidgetViewDataChanged(appWidgetId, R.id.favorites_stack);
+    }
+
+    private static void bindAllApps(
+            Context context,
+            RemoteViews views,
+            int appWidgetId) {
+        long revision = prefs(context).getLong(PREF_APPS_REVISION, 0L);
+        Intent allAppsIntent = new Intent(context, AllAppsService.class);
+        allAppsIntent.setData(Uri.parse(
+                "drawer-widget://all/" + appWidgetId + "/" + revision));
+        views.setRemoteAdapter(R.id.all_apps_grid, allAppsIntent);
+        views.setPendingIntentTemplate(
+                R.id.all_apps_grid,
+                itemTemplate(context, appWidgetId, 0));
+    }
+
+    private static void bindFavorites(
+            Context context,
+            RemoteViews views,
+            int appWidgetId) {
+        long revision = prefs(context).getLong(PREF_FAVORITES_REVISION, 0L);
+        Intent favoritesIntent = new Intent(context, FavoritesPagesService.class);
+        favoritesIntent.setData(Uri.parse(
+                "drawer-widget://favorites/" + appWidgetId + "/" + revision));
+        views.setRemoteAdapter(R.id.favorites_stack, favoritesIntent);
+        views.setEmptyView(R.id.favorites_stack, R.id.empty_favorites);
+        views.setPendingIntentTemplate(
+                R.id.favorites_stack,
+                itemTemplate(context, appWidgetId, 1));
+
+        int pageCount = favoritePageCount(context);
+        views.setDisplayedChild(
+                R.id.favorites_stack,
+                virtualFavoriteMiddle(pageCount));
+    }
+
+    private static PendingIntent itemTemplate(
+            Context context,
+            int appWidgetId,
+            int collection) {
+        Intent template = new Intent(context, LaunchReceiver.class);
+        template.setData(Uri.parse(
+                "drawer-widget://template/" + appWidgetId + "/" + collection));
+        return PendingIntent.getBroadcast(
+                context,
+                appWidgetId * 100 + collection,
+                template,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_MUTABLE);
     }
 
     private static PendingIntent activityPendingIntent(
@@ -682,22 +802,6 @@ public final class DrawerWidget {
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
     }
 
-    private static PendingIntent pagePendingIntent(
-            Context context,
-            int appWidgetId,
-            String action,
-            int requestCode) {
-        Intent intent = new Intent(context, Provider.class);
-        intent.setAction(action);
-        intent.putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId);
-        intent.setData(Uri.parse("drawer-widget://page/" + requestCode));
-        return PendingIntent.getBroadcast(
-                context,
-                requestCode,
-                intent,
-                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-    }
-
     private static void refreshAllWidgets(Context context) {
         AppWidgetManager manager = AppWidgetManager.getInstance(context);
         int[] ids = manager.getAppWidgetIds(new ComponentName(context, Provider.class));
@@ -706,35 +810,31 @@ public final class DrawerWidget {
         }
     }
 
+    private static void refreshFavoritesWidgets(Context context) {
+        AppWidgetManager manager = AppWidgetManager.getInstance(context);
+        int[] ids = manager.getAppWidgetIds(new ComponentName(context, Provider.class));
+        for (int id : ids) {
+            RemoteViews partial = new RemoteViews(
+                    context.getPackageName(),
+                    R.layout.widget_drawer);
+            bindFavorites(context, partial, id);
+            manager.partiallyUpdateAppWidget(id, partial);
+            manager.notifyAppWidgetViewDataChanged(id, R.id.favorites_stack);
+        }
+    }
+
     private static int favoritePageCount(Context context) {
         int size = loadFavoriteComponents(context).size();
         return Math.max(1, (size + FAVORITES_PER_PAGE - 1) / FAVORITES_PER_PAGE);
     }
 
-    private static int currentPage(Context context, int appWidgetId, int pageCount) {
-        int page = prefs(context).getInt(PREF_PAGE_PREFIX + appWidgetId, 0);
-        int clamped = Math.max(0, Math.min(page, pageCount - 1));
-        if (clamped != page) {
-            prefs(context).edit().putInt(PREF_PAGE_PREFIX + appWidgetId, clamped).apply();
+    private static int virtualFavoriteMiddle(int realPageCount) {
+        if (realPageCount <= 1) {
+            return 0;
         }
-        return clamped;
-    }
-
-    private static String pageIndicator(int page, int pageCount) {
-        if (pageCount <= 1) {
-            return "●";
-        }
-        if (pageCount > 5) {
-            return (page + 1) + " / " + pageCount;
-        }
-        StringBuilder builder = new StringBuilder();
-        for (int i = 0; i < pageCount; i++) {
-            if (i > 0) {
-                builder.append(' ');
-            }
-            builder.append(i == page ? '●' : '○');
-        }
-        return builder.toString();
+        int count = realPageCount * FAVORITE_PAGE_CYCLES;
+        int middle = count / 2;
+        return middle - Math.floorMod(middle, realPageCount);
     }
 
     private static SharedPreferences prefs(Context context) {
@@ -765,8 +865,12 @@ public final class DrawerWidget {
             }
             builder.append(component);
         }
-        prefs(context).edit().putString(PREF_FAVORITES, builder.toString()).apply();
-        refreshAllWidgets(context);
+
+        prefs(context).edit()
+                .putString(PREF_FAVORITES, builder.toString())
+                .putLong(PREF_FAVORITES_REVISION, System.currentTimeMillis())
+                .apply();
+        refreshFavoritesWidgets(context);
     }
 
     private static Map<String, AppEntry> appMap(Context context) {
@@ -782,28 +886,50 @@ public final class DrawerWidget {
         PackageManager packageManager = context.getPackageManager();
         Intent launcherIntent = new Intent(Intent.ACTION_MAIN);
         launcherIntent.addCategory(Intent.CATEGORY_LAUNCHER);
-        List<ResolveInfo> resolved = packageManager.queryIntentActivities(launcherIntent, 0);
+
+        List<ResolveInfo> resolved;
+        long matchFlags = PackageManager.MATCH_DISABLED_COMPONENTS;
+        if (Build.VERSION.SDK_INT >= 33) {
+            resolved = packageManager.queryIntentActivities(
+                    launcherIntent,
+                    PackageManager.ResolveInfoFlags.of(matchFlags));
+        } else {
+            resolved = packageManager.queryIntentActivities(
+                    launcherIntent,
+                    (int) matchFlags);
+        }
+
         List<AppEntry> apps = new ArrayList<>();
         Set<String> seen = new LinkedHashSet<>();
 
         for (ResolveInfo info : resolved) {
-            if (info.activityInfo == null) {
+            ActivityInfo activityInfo = info.activityInfo;
+            if (activityInfo == null) {
                 continue;
             }
+
             ComponentName component = new ComponentName(
-                    info.activityInfo.packageName,
-                    info.activityInfo.name);
+                    activityInfo.packageName,
+                    activityInfo.name);
             String flattened = component.flattenToString();
             if (!seen.add(flattened)
                     || context.getPackageName().equals(component.getPackageName())) {
                 continue;
             }
-            CharSequence loadedLabel = info.loadLabel(packageManager);
-            String label = loadedLabel == null
-                    ? component.getShortClassName()
-                    : loadedLabel.toString();
-            Drawable icon = info.loadIcon(packageManager);
-            apps.add(new AppEntry(component, label, icon));
+
+            try {
+                CharSequence loadedLabel = info.loadLabel(packageManager);
+                String label = loadedLabel == null
+                        ? component.getShortClassName()
+                        : loadedLabel.toString();
+                Drawable icon = info.loadIcon(packageManager);
+                boolean enabled = isComponentEnabled(
+                        packageManager,
+                        component,
+                        activityInfo);
+                apps.add(new AppEntry(component, label, icon, enabled));
+            } catch (RuntimeException ignored) {
+            }
         }
 
         Collator collator = Collator.getInstance(Locale.getDefault());
@@ -817,6 +943,65 @@ public final class DrawerWidget {
         return apps;
     }
 
+    private static boolean isComponentEnabled(
+            PackageManager packageManager,
+            ComponentName component,
+            ActivityInfo activityInfo) {
+        boolean manifestEnabled = activityInfo.enabled;
+        ApplicationInfo applicationInfo = activityInfo.applicationInfo;
+        if (applicationInfo != null) {
+            manifestEnabled &= applicationInfo.enabled;
+        }
+
+        int appSetting;
+        int componentSetting;
+        try {
+            appSetting = packageManager.getApplicationEnabledSetting(
+                    component.getPackageName());
+        } catch (IllegalArgumentException ignored) {
+            return false;
+        }
+        componentSetting = packageManager.getComponentEnabledSetting(component);
+
+        boolean appEnabled = appSetting != PackageManager.COMPONENT_ENABLED_STATE_DISABLED
+                && appSetting != PackageManager.COMPONENT_ENABLED_STATE_DISABLED_USER
+                && appSetting != PackageManager.COMPONENT_ENABLED_STATE_DISABLED_UNTIL_USED;
+        boolean componentEnabled =
+                componentSetting != PackageManager.COMPONENT_ENABLED_STATE_DISABLED
+                        && componentSetting
+                        != PackageManager.COMPONENT_ENABLED_STATE_DISABLED_USER;
+
+        return manifestEnabled && appEnabled && componentEnabled;
+    }
+
+    private static boolean isPackageEnabled(Context context, String packageName) {
+        try {
+            PackageManager pm = context.getPackageManager();
+            int setting = pm.getApplicationEnabledSetting(packageName);
+            if (setting == PackageManager.COMPONENT_ENABLED_STATE_DISABLED
+                    || setting == PackageManager.COMPONENT_ENABLED_STATE_DISABLED_USER
+                    || setting
+                    == PackageManager.COMPONENT_ENABLED_STATE_DISABLED_UNTIL_USED) {
+                return false;
+            }
+
+            ApplicationInfo info;
+            if (Build.VERSION.SDK_INT >= 33) {
+                info = pm.getApplicationInfo(
+                        packageName,
+                        PackageManager.ApplicationInfoFlags.of(
+                                PackageManager.MATCH_DISABLED_COMPONENTS));
+            } else {
+                info = pm.getApplicationInfo(
+                        packageName,
+                        PackageManager.MATCH_DISABLED_COMPONENTS);
+            }
+            return info.enabled;
+        } catch (PackageManager.NameNotFoundException | IllegalArgumentException ignored) {
+            return false;
+        }
+    }
+
     private static Bitmap iconBitmap(Context context, Drawable drawable) {
         int size = Math.max(1, dp(context, 48));
         Bitmap bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
@@ -826,16 +1011,56 @@ public final class DrawerWidget {
         return bitmap;
     }
 
-    private static void launchComponent(Context context, ComponentName component) {
+    private static void launchNormally(
+            Context context,
+            String packageName,
+            ComponentName fallbackComponent) {
         try {
-            Intent intent = Intent.makeMainActivity(component);
+            PackageManager pm = context.getPackageManager();
+            Intent intent = pm.getLaunchIntentForPackage(packageName);
+            if (intent == null && fallbackComponent != null) {
+                intent = Intent.makeMainActivity(fallbackComponent);
+            }
+            if (intent == null) {
+                launchWithRootFreeze(context, packageName, packageName);
+                return;
+            }
             intent.addFlags(
                     Intent.FLAG_ACTIVITY_NEW_TASK
                             | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
             context.startActivity(intent);
         } catch (ActivityNotFoundException | SecurityException error) {
-            Toast.makeText(context, "Unable to open app", Toast.LENGTH_SHORT).show();
+            launchWithRootFreeze(context, packageName, packageName);
         }
+    }
+
+    private static void launchWithRootFreeze(
+            Context context,
+            String packageName,
+            String label) {
+        Intent proxy = new Intent();
+        proxy.setComponent(new ComponentName(FREEZE_PACKAGE, FREEZE_PROXY));
+        proxy.putExtra(FREEZE_EXTRA_PACKAGE, packageName);
+        proxy.putExtra(
+                FREEZE_EXTRA_LABEL,
+                label == null || label.trim().isEmpty() ? packageName : label);
+        proxy.addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK
+                        | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        try {
+            context.startActivity(proxy);
+        } catch (ActivityNotFoundException | SecurityException error) {
+            Toast.makeText(
+                    context,
+                    "Root Freeze Shortcuts is not installed or cannot be opened",
+                    Toast.LENGTH_LONG)
+                    .show();
+        }
+    }
+
+    private static boolean isValidPackageName(String packageName) {
+        return packageName != null
+                && packageName.matches("[A-Za-z0-9_]+(?:\\.[A-Za-z0-9_]+)+");
     }
 
     private static LinearLayout verticalRoot(Context context) {
