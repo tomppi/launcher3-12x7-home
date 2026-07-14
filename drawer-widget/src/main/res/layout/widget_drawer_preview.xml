@@ -22,7 +22,7 @@
         android:layout_height="0dp"
         android:layout_weight="1"
         android:gravity="center"
-        android:text="ALL APPS\n\n6 columns\nExpands to fill available space\nVertically scrollable"
+        android:text="ALL APPS\n\n6 columns\nFills available space\nVertically scrollable"
         android:textAlignment="center"
         android:textColor="#F2F2F2"
         android:textSize="15sp" />
@@ -39,7 +39,7 @@
         android:layout_width="match_parent"
         android:layout_height="34dp"
         android:gravity="center_vertical"
-        android:text="★  FAVORITES                  ‹  ●  ›"
+        android:text="★  FAVORITES                                  Swipe"
         android:textColor="#FFFFFF"
         android:textSize="13sp"
         android:textStyle="bold" />
@@ -48,7 +48,7 @@
         android:layout_width="match_parent"
         android:layout_height="152dp"
         android:gravity="center"
-        android:text="12 favorites per page\n6 columns × 2 fixed rows"
+        android:text="12 favorites per page\n6 columns × 2 rows\nContinuous swipe paging"
         android:textAlignment="center"
         android:textColor="#F2F2F2"
         android:textSize="15sp" />
