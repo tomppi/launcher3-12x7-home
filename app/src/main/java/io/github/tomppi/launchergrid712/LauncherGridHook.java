@@ -1,13 +1,15 @@
 package io.github.tomppi.launchergrid712;
 
 import android.appwidget.AppWidgetHostView;
+import android.appwidget.AppWidgetManager;
 import android.appwidget.AppWidgetProviderInfo;
+import android.content.ComponentName;
+import android.content.Intent;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewConfiguration;
 import android.view.ViewGroup;
 import android.view.ViewTreeObserver;
-import android.widget.AdapterViewAnimator;
 
 import java.util.Collections;
 import java.util.Map;
@@ -25,8 +27,8 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage;
  *
  * <p>The module keeps Launcher3's stock foldable page model while changing the workspace grid and
  * widget resize limits. It also adds horizontal swipe paging to the companion Drawer Widget's
- * favorites flipper. All Apps, folders, hotseat, taskbar, gestures, and Recents are otherwise left
- * alone.</p>
+ * static Favorites area. All Apps, folders, hotseat, taskbar, gestures, and Recents are otherwise
+ * left alone.</p>
  */
 public final class LauncherGridHook implements IXposedHookLoadPackage {
     private static final String TAG = "Q5QLauncherGrid";
@@ -39,7 +41,13 @@ public final class LauncherGridHook implements IXposedHookLoadPackage {
             "com.android.launcher3.AppWidgetResizeFrame";
 
     private static final String DRAWER_WIDGET_PACKAGE = "io.github.tomppi.drawerwidget";
-    private static final String FAVORITES_VIEW_NAME = "favorites_stack";
+    private static final String DRAWER_WIDGET_PROVIDER =
+            "io.github.tomppi.drawerwidget.DrawerWidget$Provider";
+    private static final String ACTION_FAVORITES_NEXT =
+            "io.github.tomppi.drawerwidget.action.FAVORITES_NEXT";
+    private static final String ACTION_FAVORITES_PREVIOUS =
+            "io.github.tomppi.drawerwidget.action.FAVORITES_PREVIOUS";
+    private static final String FAVORITES_VIEW_NAME = "favorites_touch_area";
     private static final String FAVORITE_SLOT_PREFIX = "favorite_slot_";
 
     private static final int WORKSPACE_COLUMNS = 7;
@@ -221,9 +229,8 @@ public final class LauncherGridHook implements IXposedHookLoadPackage {
     }
 
     /**
-     * RemoteViews does not provide a flat horizontal-paging collection widget. The companion widget
-     * therefore uses AdapterViewFlipper for its flat 6x3 pages, and this Launcher3-side hook maps
-     * left/right touch gestures over those pages to showNext/showPrevious.
+     * The Drawer Widget renders Favorites as a static 6x3 page. This Launcher3-side hook maps
+     * left/right gestures over that page to explicit broadcasts that change the stored page index.
      */
     private static void installDrawerFavoritesSwipeHook() {
         Set<XC_MethodHook.Unhook> hooks = XposedBridge.hookAllMethods(
@@ -278,30 +285,29 @@ public final class LauncherGridHook implements IXposedHookLoadPackage {
     }
 
     private static void attachToCurrentFavoritesTree(AppWidgetHostView host) {
-        View view = findViewByEntryName(host, FAVORITES_VIEW_NAME);
-        if (!(view instanceof AdapterViewAnimator)) {
+        View favorites = findViewByEntryName(host, FAVORITES_VIEW_NAME);
+        if (favorites == null) {
             return;
         }
 
-        AdapterViewAnimator animator = (AdapterViewAnimator) view;
-        attachSwipeListenersRecursively(animator, animator);
+        attachSwipeListenersRecursively(favorites, host);
 
         if (!favoritesSwipeLogWritten) {
             favoritesSwipeLogWritten = true;
             XposedBridge.log(
-                    TAG + ": horizontal Favorites swipe support attached to Drawer Widget");
+                    TAG + ": horizontal Favorites swipe broadcasts attached to Drawer Widget");
         }
     }
 
     private static void attachSwipeListenersRecursively(
             View view,
-            AdapterViewAnimator animator) {
+            AppWidgetHostView host) {
         String name = resourceEntryName(view);
         if (FAVORITES_VIEW_NAME.equals(name)
                 || (name != null && name.startsWith(FAVORITE_SLOT_PREFIX))) {
             synchronized (SWIPE_LISTENERS) {
                 if (!SWIPE_LISTENERS.containsKey(view)) {
-                    view.setOnTouchListener(new HorizontalFavoritesSwipeListener(animator));
+                    view.setOnTouchListener(new HorizontalFavoritesSwipeListener(host));
                     SWIPE_LISTENERS.put(view, Boolean.TRUE);
                 }
             }
@@ -310,7 +316,7 @@ public final class LauncherGridHook implements IXposedHookLoadPackage {
         if (view instanceof ViewGroup) {
             ViewGroup group = (ViewGroup) view;
             for (int i = 0; i < group.getChildCount(); i++) {
-                attachSwipeListenersRecursively(group.getChildAt(i), animator);
+                attachSwipeListenersRecursively(group.getChildAt(i), host);
             }
         }
     }
@@ -347,13 +353,13 @@ public final class LauncherGridHook implements IXposedHookLoadPackage {
 
     private static final class HorizontalFavoritesSwipeListener
             implements View.OnTouchListener {
-        private final AdapterViewAnimator animator;
+        private final AppWidgetHostView host;
         private float downX;
         private float downY;
         private boolean horizontalSwipe;
 
-        HorizontalFavoritesSwipeListener(AdapterViewAnimator animator) {
-            this.animator = animator;
+        HorizontalFavoritesSwipeListener(AppWidgetHostView host) {
+            this.host = host;
         }
 
         @Override
@@ -392,14 +398,11 @@ public final class LauncherGridHook implements IXposedHookLoadPackage {
                             ViewConfiguration.get(view.getContext()).getScaledTouchSlop() * 3);
 
                     if (Math.abs(deltaX) >= minimum
-                            && Math.abs(deltaX) > Math.abs(deltaY) * 1.25f
-                            && animator.getAdapter() != null
-                            && animator.getAdapter().getCount() > 1) {
-                        if (deltaX < 0) {
-                            animator.showNext();
-                        } else {
-                            animator.showPrevious();
-                        }
+                            && Math.abs(deltaX) > Math.abs(deltaY) * 1.25f) {
+                        sendFavoritePageBroadcast(
+                                deltaX < 0
+                                        ? ACTION_FAVORITES_NEXT
+                                        : ACTION_FAVORITES_PREVIOUS);
                     }
                     view.setPressed(false);
                     return true;
@@ -412,6 +415,22 @@ public final class LauncherGridHook implements IXposedHookLoadPackage {
                 default:
                     return false;
             }
+        }
+
+        private void sendFavoritePageBroadcast(String action) {
+            int appWidgetId = host.getAppWidgetId();
+            if (appWidgetId == AppWidgetManager.INVALID_APPWIDGET_ID) {
+                return;
+            }
+
+            Intent intent = new Intent(action);
+            intent.setComponent(new ComponentName(
+                    DRAWER_WIDGET_PACKAGE,
+                    DRAWER_WIDGET_PROVIDER));
+            intent.putExtra(
+                    AppWidgetManager.EXTRA_APPWIDGET_ID,
+                    appWidgetId);
+            host.getContext().sendBroadcast(intent);
         }
 
         private static void requestNoParentIntercept(View view, boolean disallow) {
