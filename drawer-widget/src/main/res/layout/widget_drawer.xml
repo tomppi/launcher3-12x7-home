@@ -35,10 +35,12 @@
             android:textSize="21sp" />
     </LinearLayout>
 
+    <!-- Consume all vertical room left after the fixed Favorites tray. -->
     <GridView
         android:id="@+id/all_apps_grid"
         android:layout_width="match_parent"
-        android:layout_height="304dp"
+        android:layout_height="0dp"
+        android:layout_weight="1"
         android:clipToPadding="false"
         android:columnWidth="52dp"
         android:gravity="center"
@@ -48,8 +50,6 @@
         android:stretchMode="columnWidth"
         android:verticalSpacing="0dp" />
 
-    <!-- RemoteViews only permits a restricted set of safe view classes. A plain <View>
-         here caused Launcher3 to reject the complete widget layout. -->
     <TextView
         android:layout_width="match_parent"
         android:layout_height="1dp"
@@ -102,6 +102,7 @@
             android:textSize="27sp" />
     </LinearLayout>
 
+    <!-- Fixed two-row tray: six columns by two rows. -->
     <FrameLayout
         android:layout_width="match_parent"
         android:layout_height="152dp">
