@@ -74,6 +74,7 @@
             android:textStyle="bold" />
 
         <TextView
+            android:id="@+id/favorites_page_indicator"
             android:layout_width="wrap_content"
             android:layout_height="match_parent"
             android:gravity="center_vertical"
@@ -86,15 +87,7 @@
         android:layout_width="match_parent"
         android:layout_height="228dp">
 
-        <AdapterViewFlipper
-            android:id="@+id/favorites_stack"
-            android:layout_width="match_parent"
-            android:layout_height="228dp"
-            android:animateFirstView="false"
-            android:autoStart="false"
-            android:clickable="true"
-            android:focusable="true"
-            android:loopViews="true" />
+        <include layout="@layout/widget_favorites_page" />
 
         <TextView
             android:id="@+id/empty_favorites"
