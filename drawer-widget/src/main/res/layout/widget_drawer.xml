@@ -77,20 +77,21 @@
             android:layout_width="wrap_content"
             android:layout_height="match_parent"
             android:gravity="center_vertical"
-            android:text="Swipe"
+            android:text="Swipe ↔"
             android:textColor="#9E9E9E"
             android:textSize="11sp" />
     </LinearLayout>
 
     <FrameLayout
         android:layout_width="match_parent"
-        android:layout_height="152dp">
+        android:layout_height="228dp">
 
-        <StackView
+        <AdapterViewFlipper
             android:id="@+id/favorites_stack"
             android:layout_width="match_parent"
-            android:layout_height="152dp"
+            android:layout_height="228dp"
             android:animateFirstView="false"
+            android:autoStart="false"
             android:clickable="true"
             android:focusable="true"
             android:loopViews="true" />
