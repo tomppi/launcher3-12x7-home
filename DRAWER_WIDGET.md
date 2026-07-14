@@ -12,7 +12,9 @@ This branch adds a second Android application module, `drawer-widget`, alongside
 │  App     App     App     App     App     App│
 │  App     App     App     App     App     App│
 │  App     App     App     App     App     App│
+│  App     App     App     App     App     App│
 │       ALL APPS — vertically scrollable     │
+│       expands to fill remaining space      │
 ├────────────────────────────────────────────┤
 │ ★ FAVORITES             ‹  ● ○ ○  ›        │
 │  Fav     Fav     Fav     Fav     Fav     Fav│
@@ -21,8 +23,8 @@ This branch adds a second Android application module, `drawer-widget`, alongside
 ```
 
 - Six columns.
-- Four visible, vertically scrolling All Apps rows.
-- Two fixed Favorites rows.
+- All Apps expands to consume all space above Favorites and remains vertically scrollable.
+- Two fixed Favorites rows remain anchored at the bottom.
 - Twelve favorites per page.
 - Previous/next paging and page dots.
 - Search opens a full app-search screen.
