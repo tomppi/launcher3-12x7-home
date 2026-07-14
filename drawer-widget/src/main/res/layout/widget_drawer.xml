@@ -35,7 +35,6 @@
             android:textSize="21sp" />
     </LinearLayout>
 
-    <!-- Consume all vertical room left after the fixed Favorites tray. -->
     <GridView
         android:id="@+id/all_apps_grid"
         android:layout_width="match_parent"
@@ -75,49 +74,25 @@
             android:textStyle="bold" />
 
         <TextView
-            android:id="@+id/favorites_previous"
-            android:layout_width="36dp"
-            android:layout_height="34dp"
-            android:gravity="center"
-            android:text="‹"
-            android:textColor="#FFFFFF"
-            android:textSize="27sp" />
-
-        <TextView
-            android:id="@+id/favorites_page"
-            android:layout_width="72dp"
-            android:layout_height="34dp"
-            android:gravity="center"
-            android:text="●"
-            android:textColor="#FFFFFF"
-            android:textSize="12sp" />
-
-        <TextView
-            android:id="@+id/favorites_next"
-            android:layout_width="36dp"
-            android:layout_height="34dp"
-            android:gravity="center"
-            android:text="›"
-            android:textColor="#FFFFFF"
-            android:textSize="27sp" />
+            android:layout_width="wrap_content"
+            android:layout_height="match_parent"
+            android:gravity="center_vertical"
+            android:text="Swipe"
+            android:textColor="#9E9E9E"
+            android:textSize="11sp" />
     </LinearLayout>
 
-    <!-- Fixed two-row tray: six columns by two rows. -->
     <FrameLayout
         android:layout_width="match_parent"
         android:layout_height="152dp">
 
-        <GridView
-            android:id="@+id/favorites_grid"
+        <StackView
+            android:id="@+id/favorites_stack"
             android:layout_width="match_parent"
             android:layout_height="152dp"
-            android:clipToPadding="false"
-            android:columnWidth="52dp"
-            android:gravity="center"
-            android:horizontalSpacing="0dp"
-            android:numColumns="6"
-            android:stretchMode="columnWidth"
-            android:verticalSpacing="0dp" />
+            android:animateFirstView="false"
+            android:clickable="true"
+            android:focusable="true" />
 
         <TextView
             android:id="@+id/empty_favorites"
