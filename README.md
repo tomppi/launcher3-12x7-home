@@ -4,35 +4,30 @@ An LSPosed module for the LineageOS Launcher3/Quickstep package on the Samsung G
 
 Here **12×7 means 12 rows high and 7 columns across**.
 
-## What it changes
+## Stable behavior
 
 - Launcher desktop: **7 columns × 12 rows**.
 - Workspace icon size is capped at 42 dp and label size at 10.5 sp so twelve rows fit.
-- The unfolded Fold5 uses Launcher3's **single-page foldable workspace**, so the inner display is one full-width home grid instead of two separate panels.
-- Widgets report a **1×1 minimum**, **7×12 maximum**, and both horizontal and vertical resize directions.
-- The active widget resize frame is also forced to the same 1×1 through 7×12 bounds as a compatibility fallback.
 - App drawer is untouched.
-- Folder grid, hotseat, search container, Recents, gestures, and taskbar settings are untouched.
+- Widgets use Launcher3's stock sizing and resize rules.
+- The Fold5 keeps Launcher3's stock two-panel unfolded workspace.
+- Folders, hotseat, search container, Recents, gestures, and taskbar are untouched.
 - No Nova-style fractional/subgrid positioning is added.
 
-The module does not add a new entry to Launcher3's grid picker. It overrides the currently selected stock grid while Launcher3 starts.
+The module does not add a new entry to Launcher3's grid picker. It overrides the currently selected stock workspace grid while Launcher3 starts.
 
-## Widget behavior
+## v2.0.1 stability rollback
 
-Launcher3 normally uses each widget provider's declared minimum and maximum dimensions. This module deliberately relaxes those bounds.
+Version 2.0.0 experimentally enabled Launcher3's `FOLDABLE_SINGLE_PAGE` flag and rewrote widget resize metadata. On this LineageOS Launcher3 build, the single-page mode did not produce a usable full-width workspace and the combined hooks made Launcher3 unstable.
 
-That allows much finer resizing, but a widget can still crop, waste space, or render poorly when made smaller than its developer intended. The module changes the host-side grid limits; it cannot redesign the widget's own layout.
+Version **2.0.1 removes both experimental features** and restores the previously stable grid-only implementation. Its higher version code allows it to install directly over v2.0.0.
 
-The single-page foldable mode is what allows one widget to span the full width of the unfolded inner display. Without it, Launcher3 treats each half as a separate `CellLayout` and blocks cross-panel widgets.
+A widget cannot span both halves of the unfolded home screen while Launcher3 uses two separate `CellLayout` panels. Implementing that reliably requires a Launcher3 source modification rather than a small LSPosed field override.
 
 ## Target
 
 - Package: `com.android.launcher3`
-- Designed for the LineageOS Launcher3 structure containing:
-  - `InvariantDeviceProfile.initGridForDisplayOption(...)`
-  - `FeatureFlags.FOLDABLE_SINGLE_PAGE`
-  - `LauncherAppWidgetProviderInfo.initSpans(...)`
-  - `AppWidgetResizeFrame.setupForWidget(...)`
+- Hook: `InvariantDeviceProfile.initGridForDisplayOption(...)`
 
 ## Build with GitHub Actions
 
@@ -48,40 +43,24 @@ The project compiles against a local source-only Xposed API stub module. Those s
 2. Open LSPosed → Modules → **Q5Q Launcher Grid 7×12**.
 3. Enable it and scope it only to **Launcher3** (`com.android.launcher3`).
 4. Reboot the phone.
-5. Keep Nova installed until the single-page workspace and existing widget migration have been checked on both displays.
 
-A full reboot is recommended because Quickstep is also the Recents provider and Launcher3 needs to rebuild its workspace state.
+A full reboot is recommended because Quickstep is also the Recents provider.
 
 ## Verification
 
 Open the LSPosed log and search for:
 
 ```text
-Q5QLauncherGrid: enabled foldable single-page workspace
-Q5QLauncherGrid: applied 7 columns x 12 rows; app drawer untouched
-Q5QLauncherGrid: widget metadata set to min 1x1, max 7x12, both directions
-Q5QLauncherGrid: active widget resize frame set to 1x1 through 7x12
-```
-
-You can also check the Launcher package with:
-
-```sh
-su -c 'pm path com.android.launcher3'
+Q5QLauncherGrid: stable grid-only hook installed for com.android.launcher3
+Q5QLauncherGrid: applied stable 7 columns x 12 rows; app drawer and widgets untouched
 ```
 
 ## Recovery
 
-If Launcher3 behaves incorrectly:
+If Launcher3 remains unstable after installing v2.0.1:
 
-1. Open LSPosed and disable this module.
+1. Disable the module in LSPosed.
 2. Reboot.
-3. Select Nova as the default launcher if Launcher3's migrated workspace needs to be repaired.
+3. Select Nova temporarily if Launcher3's workspace database needs to settle after the v2.0.0 experiment.
 
-The hooks catch compatibility errors and leave the corresponding stock Launcher3 behavior in place instead of deliberately crashing it.
-
-## Notes
-
-- Enabling the single-page foldable workspace can rearrange existing icons and widgets during Launcher3's first migration.
-- Disabling the module later shrinks the grid and restores the stock foldable page model, so items stored in extra rows or wide widget spans may be moved.
-- The module intentionally leaves Launcher3's database filename and app-drawer profile unchanged.
-- A future Launcher3 update that renames the targeted classes, methods, or fields will require a compatibility update.
+The hook catches compatibility errors and leaves Launcher3's stock grid in place instead of deliberately crashing it.

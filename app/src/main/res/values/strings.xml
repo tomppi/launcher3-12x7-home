@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Q5Q Launcher Grid 7×12</string>
-    <string name="xposed_description">Uses a 7-column by 12-row Launcher3 home grid, a single full-width foldable workspace, and flexible 1×1 through 7×12 widget resizing.</string>
+    <string name="xposed_description">Uses a stable 7-column by 12-row Launcher3 home grid while leaving widgets, foldable workspace behavior, and the app drawer unchanged.</string>
 </resources>
