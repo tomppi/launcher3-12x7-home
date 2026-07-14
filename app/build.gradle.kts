@@ -30,6 +30,6 @@ android {
 }
 
 dependencies {
-    // Minimal legacy Xposed API stubs. compileOnly means they are not bundled in the APK.
-    compileOnly(files("libs/xposed-api-stubs.jar"))
+    // Compile against local Xposed API stubs without packaging them into the APK.
+    compileOnly(project(":xposed-stubs"))
 }

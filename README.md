@@ -25,7 +25,7 @@ The module does not add a new entry to Launcher3's grid picker. It overrides the
 2. Download the `q5q-launcher3-grid-7x12-lsposed` artifact.
 3. Install `app-debug.apk` from the artifact.
 
-The project includes a tiny compile-only Xposed API stub JAR. Those classes are not bundled into the APK.
+The project compiles against a local source-only Xposed API stub module. Those stub classes are compile-only and are not packaged into the APK.
 
 ## Install and enable
 
