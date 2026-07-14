@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/widget_background"
+    android:orientation="vertical"
+    android:padding="12dp">
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="46dp"
+        android:background="@drawable/search_background"
+        android:gravity="center_vertical"
+        android:paddingStart="16dp"
+        android:paddingEnd="16dp"
+        android:text="⌕  Search apps"
+        android:textColor="#CFCFCF"
+        android:textSize="16sp" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="304dp"
+        android:gravity="center"
+        android:text="ALL APPS\n\n6 columns × 4 visible rows\nVertically scrollable"
+        android:textAlignment="center"
+        android:textColor="#F2F2F2"
+        android:textSize="15sp" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:layout_marginTop="4dp"
+        android:layout_marginBottom="4dp"
+        android:background="#4A4A4A"
+        android:text="" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="34dp"
+        android:gravity="center_vertical"
+        android:text="★  FAVORITES                  ‹  ●  ›"
+        android:textColor="#FFFFFF"
+        android:textSize="13sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="152dp"
+        android:gravity="center"
+        android:text="12 favorites per page\n6 columns × 2 rows"
+        android:textAlignment="center"
+        android:textColor="#F2F2F2"
+        android:textSize="15sp" />
+</LinearLayout>
