@@ -107,8 +107,9 @@ public final class DrawerWidget {
     public static final class Provider extends AppWidgetProvider {
         @Override
         public void onUpdate(Context context, AppWidgetManager manager, int[] appWidgetIds) {
+            List<AppEntry> favorites = loadFavoriteEntries(context);
             for (int appWidgetId : appWidgetIds) {
-                updateWidget(context, manager, appWidgetId);
+                updateWidget(context, manager, appWidgetId, favorites);
             }
         }
 
@@ -137,10 +138,13 @@ public final class DrawerWidget {
                 return;
             }
 
-            int pageCount = favoritePageCount(context);
+            // Load once for the complete swipe operation. Previously page counting and rendering
+            // independently enumerated every launcher activity and decoded every icon.
+            List<AppEntry> favorites = loadFavoriteEntries(context);
+            int pageCount = pageCount(favorites.size());
             if (pageCount <= 1) {
                 setFavoritePage(context, appWidgetId, 0);
-                refreshFavoritePage(context, appWidgetId);
+                refreshFavoritePage(context, appWidgetId, favorites);
                 return;
             }
 
@@ -149,7 +153,7 @@ public final class DrawerWidget {
                     ? Math.floorMod(page + 1, pageCount)
                     : Math.floorMod(page - 1, pageCount);
             setFavoritePage(context, appWidgetId, page);
-            refreshFavoritePage(context, appWidgetId);
+            refreshFavoritePage(context, appWidgetId, favorites);
         }
     }
 
@@ -255,12 +259,15 @@ public final class DrawerWidget {
 
         @Override
         public long getItemId(int position) {
-            return position;
+            AppEntry entry = position >= 0 && position < entries.size()
+                    ? entries.get(position)
+                    : null;
+            return entry == null ? position : favoriteKey(entry).hashCode();
         }
 
         @Override
         public boolean hasStableIds() {
-            return false;
+            return true;
         }
     }
 
@@ -268,15 +275,9 @@ public final class DrawerWidget {
             Context context,
             RemoteViews views,
             AppEntry entry) {
-        views.setTextViewText(
-                R.id.app_label,
-                displayedLabel(context, entry));
-        views.setImageViewBitmap(
-                R.id.app_icon,
-                iconBitmap(context, entry.icon));
-
-        Intent fillIn = launchIntent(entry);
-        views.setOnClickFillInIntent(R.id.app_item_root, fillIn);
+        views.setTextViewText(R.id.app_label, displayedLabel(context, entry));
+        views.setImageViewBitmap(R.id.app_icon, iconBitmap(context, entry.icon));
+        views.setOnClickFillInIntent(R.id.app_item_root, launchIntent(entry));
     }
 
     public static final class SearchActivity extends Activity {
@@ -330,7 +331,10 @@ public final class DrawerWidget {
                     for (AppEntry app : allApps) {
                         if (query.isEmpty()
                                 || app.label.toLowerCase(Locale.getDefault()).contains(query)
-                                || app.packageName.toLowerCase(Locale.ROOT).contains(query)) {
+                                || app.packageName.toLowerCase(Locale.ROOT).contains(query)
+                                || app.component.getClassName()
+                                        .toLowerCase(Locale.ROOT)
+                                        .contains(query)) {
                             shownApps.add(app);
                         }
                     }
@@ -395,7 +399,11 @@ public final class DrawerWidget {
                     dp(this, 56)));
             setContentView(root);
 
-            listView.setOnItemClickListener((parent, view, position, id) -> selected = position);
+            listView.setOnItemClickListener((parent, view, position, id) -> {
+                selected = position;
+                adapter.setSelectedPosition(position);
+                adapter.notifyDataSetChanged();
+            });
             selectFavorites.setOnClickListener(
                     v -> startActivity(new Intent(this, AddFavoritesActivity.class)));
             selectFreeze.setOnClickListener(
@@ -413,16 +421,11 @@ public final class DrawerWidget {
 
         private void reloadFavorites() {
             favorites.clear();
-            Map<String, AppEntry> apps = appMapByPackage(this);
-            for (String packageName : loadFavoritePackages(this)) {
-                AppEntry entry = apps.get(packageName);
-                if (entry != null) {
-                    favorites.add(entry);
-                }
-            }
+            favorites.addAll(loadFavoriteEntries(this));
             adapter = new AppListAdapter(this, favorites);
             listView.setAdapter(adapter);
             selected = -1;
+            listView.clearChoices();
         }
 
         private void moveSelected(int delta) {
@@ -436,8 +439,10 @@ public final class DrawerWidget {
             Collections.swap(favorites, selected, target);
             selected = target;
             saveCurrentOrder();
+            adapter.setSelectedPosition(selected);
             adapter.notifyDataSetChanged();
             listView.setItemChecked(selected, true);
+            listView.setSelection(selected);
         }
 
         private void removeSelected() {
@@ -447,16 +452,17 @@ public final class DrawerWidget {
             favorites.remove(selected);
             selected = -1;
             saveCurrentOrder();
+            adapter.setSelectedPosition(-1);
             adapter.notifyDataSetChanged();
             listView.clearChoices();
         }
 
         private void saveCurrentOrder() {
-            List<String> packages = new ArrayList<>();
+            List<String> keys = new ArrayList<>();
             for (AppEntry entry : favorites) {
-                packages.add(entry.packageName);
+                keys.add(favoriteKey(entry));
             }
-            saveFavoritePackages(this, packages);
+            saveFavoriteKeys(this, keys);
         }
     }
 
@@ -485,16 +491,17 @@ public final class DrawerWidget {
 
             allApps.addAll(loadApps(this));
             List<String> labels = new ArrayList<>();
-            Set<String> existing = new LinkedHashSet<>(loadFavoritePackages(this));
+            Set<String> existing = new LinkedHashSet<>(loadFavoriteKeys(this, allApps));
             for (AppEntry app : allApps) {
-                labels.add(app.label + "\n" + app.packageName);
+                labels.add(app.label + "\n" + app.packageName + " · "
+                        + app.component.getShortClassName());
             }
             listView.setAdapter(new ArrayAdapter<>(
                     this,
                     android.R.layout.simple_list_item_multiple_choice,
                     labels));
             for (int i = 0; i < allApps.size(); i++) {
-                listView.setItemChecked(i, existing.contains(allApps.get(i).packageName));
+                listView.setItemChecked(i, existing.contains(favoriteKey(allApps.get(i))));
             }
             save.setOnClickListener(v -> saveAndClose());
         }
@@ -504,18 +511,18 @@ public final class DrawerWidget {
             Set<String> chosen = new LinkedHashSet<>();
             for (int i = 0; i < allApps.size(); i++) {
                 if (checked.get(i)) {
-                    chosen.add(allApps.get(i).packageName);
+                    chosen.add(favoriteKey(allApps.get(i)));
                 }
             }
 
             List<String> ordered = new ArrayList<>();
-            for (String existing : loadFavoritePackages(this)) {
+            for (String existing : loadFavoriteKeys(this, allApps)) {
                 if (chosen.remove(existing)) {
                     ordered.add(existing);
                 }
             }
             ordered.addAll(chosen);
-            saveFavoritePackages(this, ordered);
+            saveFavoriteKeys(this, ordered);
             finish();
         }
     }
@@ -551,7 +558,9 @@ public final class DrawerWidget {
                     dp(this, 56)));
             setContentView(root);
 
-            allApps.addAll(loadApps(this));
+            // Root-freeze remains package-based even when a package exposes several launcher
+            // activities. Present one representative row per package here.
+            allApps.addAll(loadPackageSelectionApps(this));
             List<String> labels = new ArrayList<>();
             Set<String> selectedPackages = loadFreezePackages(this);
             for (AppEntry app : allApps) {
@@ -603,7 +612,12 @@ public final class DrawerWidget {
 
         @Override
         public long getItemId(int position) {
-            return position;
+            return favoriteKey(apps.get(position)).hashCode();
+        }
+
+        @Override
+        public boolean hasStableIds() {
+            return true;
         }
 
         @Override
@@ -648,10 +662,15 @@ public final class DrawerWidget {
     private static final class AppListAdapter extends BaseAdapter {
         private final Context context;
         private final List<AppEntry> apps;
+        private int selectedPosition = -1;
 
         AppListAdapter(Context context, List<AppEntry> apps) {
             this.context = context;
             this.apps = apps;
+        }
+
+        void setSelectedPosition(int position) {
+            selectedPosition = position;
         }
 
         @Override
@@ -666,7 +685,12 @@ public final class DrawerWidget {
 
         @Override
         public long getItemId(int position) {
-            return position;
+            return favoriteKey(apps.get(position)).hashCode();
+        }
+
+        @Override
+        public boolean hasStableIds() {
+            return true;
         }
 
         @Override
@@ -708,7 +732,11 @@ public final class DrawerWidget {
             AppEntry app = apps.get(position);
             icon.setImageDrawable(app.icon);
             icon.setAlpha(app.enabled ? 1f : 0.55f);
-            label.setText(displayedLabel(context, app) + "\n" + app.packageName);
+            label.setText(displayedLabel(context, app) + "\n" + app.packageName
+                    + " · " + app.component.getShortClassName());
+            boolean selected = position == selectedPosition;
+            row.setActivated(selected);
+            row.setBackgroundColor(selected ? 0xFF3F515F : 0x00000000);
             return row;
         }
     }
@@ -737,13 +765,14 @@ public final class DrawerWidget {
     private static void updateWidget(
             Context context,
             AppWidgetManager manager,
-            int appWidgetId) {
+            int appWidgetId,
+            List<AppEntry> favorites) {
         RemoteViews views = new RemoteViews(
                 context.getPackageName(),
                 R.layout.widget_drawer);
 
         bindAllApps(context, views, appWidgetId);
-        bindFavoritesPage(context, views, appWidgetId);
+        bindFavoritesPage(context, views, appWidgetId, favorites);
 
         views.setOnClickPendingIntent(
                 R.id.search_bar,
@@ -759,9 +788,7 @@ public final class DrawerWidget {
                         appWidgetId * 10 + 2));
 
         manager.updateAppWidget(appWidgetId, views);
-        manager.notifyAppWidgetViewDataChanged(
-                appWidgetId,
-                R.id.all_apps_grid);
+        manager.notifyAppWidgetViewDataChanged(appWidgetId, R.id.all_apps_grid);
     }
 
     private static void bindAllApps(
@@ -778,17 +805,11 @@ public final class DrawerWidget {
                 itemTemplate(context, appWidgetId));
     }
 
-    /**
-     * Renders Favorites directly into 18 fixed RemoteViews slots.
-     *
-     * This is intentionally not another collection widget. Updating or reordering Favorites therefore
-     * cannot cause Launcher3 to rebind or remeasure the All Apps GridView.
-     */
     private static void bindFavoritesPage(
             Context context,
             RemoteViews views,
-            int appWidgetId) {
-        List<AppEntry> favorites = loadFavoriteEntries(context);
+            int appWidgetId,
+            List<AppEntry> favorites) {
         int pageCount = pageCount(favorites.size());
         int page = currentFavoritePage(context, appWidgetId, pageCount);
         int start = page * FAVORITES_PER_PAGE;
@@ -834,8 +855,7 @@ public final class DrawerWidget {
     private static PendingIntent itemTemplate(Context context, int appWidgetId) {
         Intent template = new Intent(context, LaunchReceiver.class);
         template.setAction(ACTION_LAUNCH);
-        template.setData(Uri.parse(
-                "drawer-widget://template/" + appWidgetId));
+        template.setData(Uri.parse("drawer-widget://template/" + appWidgetId));
         return PendingIntent.getBroadcast(
                 context,
                 appWidgetId * 100,
@@ -859,7 +879,7 @@ public final class DrawerWidget {
                         + "/"
                         + slot
                         + "/"
-                        + Uri.encode(entry.packageName)));
+                        + Uri.encode(favoriteKey(entry))));
         return PendingIntent.getBroadcast(
                 context,
                 appWidgetId * 1000 + 100 + slot,
@@ -880,8 +900,7 @@ public final class DrawerWidget {
             Class<? extends Activity> activity,
             int requestCode) {
         Intent intent = new Intent(context, activity);
-        intent.setData(Uri.parse(
-                "drawer-widget://activity/" + requestCode));
+        intent.setData(Uri.parse("drawer-widget://activity/" + requestCode));
         return PendingIntent.getActivity(
                 context,
                 requestCode,
@@ -891,26 +910,29 @@ public final class DrawerWidget {
 
     private static void refreshAllWidgets(Context context) {
         AppWidgetManager manager = AppWidgetManager.getInstance(context);
-        int[] ids = manager.getAppWidgetIds(
-                new ComponentName(context, Provider.class));
+        int[] ids = manager.getAppWidgetIds(new ComponentName(context, Provider.class));
+        List<AppEntry> favorites = loadFavoriteEntries(context);
         for (int id : ids) {
-            updateWidget(context, manager, id);
+            updateWidget(context, manager, id, favorites);
         }
     }
 
-    private static void refreshFavoritePage(Context context, int appWidgetId) {
+    private static void refreshFavoritePage(
+            Context context,
+            int appWidgetId,
+            List<AppEntry> favorites) {
         RemoteViews partial = new RemoteViews(
                 context.getPackageName(),
                 R.layout.widget_drawer);
-        bindFavoritesPage(context, partial, appWidgetId);
+        bindFavoritesPage(context, partial, appWidgetId, favorites);
         AppWidgetManager.getInstance(context)
                 .partiallyUpdateAppWidget(appWidgetId, partial);
     }
 
     private static void refreshFavoritesWidgets(Context context, boolean resetPages) {
         AppWidgetManager manager = AppWidgetManager.getInstance(context);
-        int[] ids = manager.getAppWidgetIds(
-                new ComponentName(context, Provider.class));
+        int[] ids = manager.getAppWidgetIds(new ComponentName(context, Provider.class));
+        List<AppEntry> favorites = loadFavoriteEntries(context);
         for (int id : ids) {
             if (resetPages) {
                 setFavoritePage(context, id, 0);
@@ -918,13 +940,9 @@ public final class DrawerWidget {
             RemoteViews partial = new RemoteViews(
                     context.getPackageName(),
                     R.layout.widget_drawer);
-            bindFavoritesPage(context, partial, id);
+            bindFavoritesPage(context, partial, id, favorites);
             manager.partiallyUpdateAppWidget(id, partial);
         }
-    }
-
-    private static int favoritePageCount(Context context) {
-        return pageCount(loadFavoriteEntries(context).size());
     }
 
     private static int pageCount(int itemCount) {
@@ -950,38 +968,47 @@ public final class DrawerWidget {
         return normalized;
     }
 
-    private static void setFavoritePage(
-            Context context,
-            int appWidgetId,
-            int page) {
+    private static void setFavoritePage(Context context, int appWidgetId, int page) {
         prefs(context).edit()
                 .putInt(PREF_PAGE_PREFIX + appWidgetId, Math.max(0, page))
                 .apply();
     }
 
     private static SharedPreferences prefs(Context context) {
-        return context.getSharedPreferences(
-                PREFS,
-                Context.MODE_PRIVATE);
+        return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
     }
 
-    /** Migrates old activity-component favorites to stable package-name favorites. */
-    private static List<String> loadFavoritePackages(Context context) {
-        List<String> raw = readLines(
-                prefs(context).getString(PREF_FAVORITES, ""));
+    /**
+     * Returns component-based favorite identities and transparently migrates the old package-only
+     * format. Package-only values are retained only while the package has no visible launcher
+     * activity, so a temporarily unavailable favorite is not silently destroyed.
+     */
+    private static List<String> loadFavoriteKeys(
+            Context context,
+            List<AppEntry> availableApps) {
+        List<String> raw = readLines(prefs(context).getString(PREF_FAVORITES, ""));
+        Map<String, AppEntry> byPackage = appMapByPackage(context, availableApps);
         LinkedHashSet<String> normalized = new LinkedHashSet<>();
         boolean changed = false;
 
         for (String value : raw) {
-            String packageName = normalizeFavoriteValue(value);
-            if (packageName == null) {
+            String key = null;
+            ComponentName component = ComponentName.unflattenFromString(value);
+            if (isValidComponent(component)) {
+                key = component.flattenToString();
+            } else if (isValidPackageName(value)) {
+                AppEntry replacement = byPackage.get(value);
+                key = replacement == null ? value : favoriteKey(replacement);
+            }
+
+            if (key == null) {
                 changed = true;
                 continue;
             }
-            if (!packageName.equals(value)) {
+            if (!key.equals(value)) {
                 changed = true;
             }
-            if (!normalized.add(packageName)) {
+            if (!normalized.add(key)) {
                 changed = true;
             }
         }
@@ -995,37 +1022,51 @@ public final class DrawerWidget {
     }
 
     private static List<AppEntry> loadFavoriteEntries(Context context) {
-        Map<String, AppEntry> byPackage = appMapByPackage(context);
+        List<AppEntry> allApps = loadApps(context);
+        List<String> keys = loadFavoriteKeys(context, allApps);
+        Map<String, AppEntry> byComponent = appMapByComponent(allApps);
+        Map<String, AppEntry> byPackage = appMapByPackage(context, allApps);
         List<AppEntry> entries = new ArrayList<>();
-        for (String packageName : loadFavoritePackages(context)) {
-            AppEntry entry = byPackage.get(packageName);
-            if (entry != null) {
+        LinkedHashSet<String> added = new LinkedHashSet<>();
+
+        for (String key : keys) {
+            ComponentName component = ComponentName.unflattenFromString(key);
+            AppEntry entry = component == null
+                    ? byPackage.get(key)
+                    : byComponent.get(component.flattenToString());
+            if (entry != null && added.add(favoriteKey(entry))) {
                 entries.add(entry);
             }
         }
         return entries;
     }
 
-    private static String normalizeFavoriteValue(String value) {
-        if (value == null) {
-            return null;
+    private static void saveFavoriteKeys(Context context, List<String> keys) {
+        LinkedHashSet<String> unique = new LinkedHashSet<>();
+        for (String key : keys) {
+            ComponentName component = ComponentName.unflattenFromString(key);
+            if (isValidComponent(component)) {
+                unique.add(component.flattenToString());
+            } else if (isValidPackageName(key)) {
+                unique.add(key);
+            }
         }
 
-        String trimmed = value.trim();
-        ComponentName component = ComponentName.unflattenFromString(trimmed);
-        if (component != null
-                && isValidPackageName(component.getPackageName())) {
-            return component.getPackageName();
-        }
-        return isValidPackageName(trimmed) ? trimmed : null;
+        prefs(context).edit()
+                .putString(PREF_FAVORITES, joinLines(unique))
+                .apply();
+        refreshFavoritesWidgets(context, true);
     }
 
     private static Set<String> loadFreezePackages(Context context) {
-        return new LinkedHashSet<>(
-                readLines(
-                        prefs(context).getString(
-                                PREF_FREEZE_PACKAGES,
-                                "")));
+        LinkedHashSet<String> packages = new LinkedHashSet<>();
+        for (String value : readLines(
+                prefs(context).getString(PREF_FREEZE_PACKAGES, ""))) {
+            if (isValidPackageName(value)) {
+                packages.add(value);
+            }
+        }
+        return packages;
     }
 
     private static List<String> readLines(String stored) {
@@ -1043,25 +1084,7 @@ public final class DrawerWidget {
         return result;
     }
 
-    private static void saveFavoritePackages(
-            Context context,
-            List<String> packages) {
-        LinkedHashSet<String> unique = new LinkedHashSet<>();
-        for (String packageName : packages) {
-            if (isValidPackageName(packageName)) {
-                unique.add(packageName);
-            }
-        }
-
-        prefs(context).edit()
-                .putString(PREF_FAVORITES, joinLines(unique))
-                .apply();
-        refreshFavoritesWidgets(context, true);
-    }
-
-    private static void saveFreezePackages(
-            Context context,
-            Set<String> packages) {
+    private static void saveFreezePackages(Context context, Set<String> packages) {
         LinkedHashSet<String> valid = new LinkedHashSet<>();
         for (String packageName : packages) {
             if (isValidPackageName(packageName)) {
@@ -1087,9 +1110,7 @@ public final class DrawerWidget {
         return builder.toString();
     }
 
-    private static boolean usesRootFreeze(
-            Context context,
-            String packageName) {
+    private static boolean usesRootFreeze(Context context, String packageName) {
         return loadFreezePackages(context).contains(packageName);
     }
 
@@ -1099,12 +1120,47 @@ public final class DrawerWidget {
                 : entry.label;
     }
 
-    private static Map<String, AppEntry> appMapByPackage(Context context) {
+    private static String favoriteKey(AppEntry entry) {
+        return entry.component.flattenToString();
+    }
+
+    private static Map<String, AppEntry> appMapByComponent(List<AppEntry> apps) {
         Map<String, AppEntry> result = new LinkedHashMap<>();
-        for (AppEntry entry : loadApps(context)) {
-            result.put(entry.packageName, entry);
+        for (AppEntry entry : apps) {
+            result.put(favoriteKey(entry), entry);
         }
         return result;
+    }
+
+    private static Map<String, AppEntry> appMapByPackage(
+            Context context,
+            List<AppEntry> apps) {
+        PackageManager pm = context.getPackageManager();
+        Map<String, ComponentName> defaultComponents = new LinkedHashMap<>();
+        Map<String, AppEntry> result = new LinkedHashMap<>();
+
+        for (AppEntry entry : apps) {
+            AppEntry current = result.get(entry.packageName);
+            if (current == null) {
+                result.put(entry.packageName, entry);
+            }
+
+            ComponentName defaultComponent = defaultComponents.get(entry.packageName);
+            if (!defaultComponents.containsKey(entry.packageName)) {
+                Intent launch = pm.getLaunchIntentForPackage(entry.packageName);
+                defaultComponent = launch == null ? null : launch.getComponent();
+                defaultComponents.put(entry.packageName, defaultComponent);
+            }
+            if (defaultComponent != null && defaultComponent.equals(entry.component)) {
+                result.put(entry.packageName, entry);
+            }
+        }
+        return result;
+    }
+
+    private static List<AppEntry> loadPackageSelectionApps(Context context) {
+        List<AppEntry> allApps = loadApps(context);
+        return new ArrayList<>(appMapByPackage(context, allApps).values());
     }
 
     @SuppressWarnings("deprecation")
@@ -1117,76 +1173,74 @@ public final class DrawerWidget {
                 pm,
                 launcherQuery,
                 PackageManager.MATCH_DISABLED_COMPONENTS);
-        Map<String, ResolveInfo> bestByPackage = new LinkedHashMap<>();
+        Map<String, ResolveInfo> bestByComponent = new LinkedHashMap<>();
 
         for (ResolveInfo candidate : resolved) {
             ActivityInfo info = candidate.activityInfo;
             if (info == null
+                    || info.name == null
                     || context.getPackageName().equals(info.packageName)
                     || !isValidPackageName(info.packageName)) {
                 continue;
             }
 
-            ResolveInfo current = bestByPackage.get(info.packageName);
+            ComponentName component = new ComponentName(info.packageName, info.name);
+            String key = component.flattenToString();
+            ResolveInfo current = bestByComponent.get(key);
             if (current == null
                     || candidateScore(pm, candidate) > candidateScore(pm, current)) {
-                bestByPackage.put(info.packageName, candidate);
+                bestByComponent.put(key, candidate);
             }
         }
 
         List<AppEntry> apps = new ArrayList<>();
-        for (Map.Entry<String, ResolveInfo> item : bestByPackage.entrySet()) {
-            String packageName = item.getKey();
-            ResolveInfo chosen = item.getValue();
+        for (ResolveInfo chosen : bestByComponent.values()) {
             ActivityInfo activityInfo = chosen.activityInfo;
-            if (activityInfo == null) {
+            if (activityInfo == null || activityInfo.name == null) {
                 continue;
             }
 
+            String packageName = activityInfo.packageName;
+            ComponentName component = new ComponentName(packageName, activityInfo.name);
             try {
                 ApplicationInfo appInfo =
                         getApplicationInfoIncludingDisabled(pm, packageName);
-                Intent direct = pm.getLaunchIntentForPackage(packageName);
-                ComponentName component =
-                        direct != null && direct.getComponent() != null
-                                ? direct.getComponent()
-                                : new ComponentName(
-                                        packageName,
-                                        activityInfo.name);
+                CharSequence loadedLabel = chosen.loadLabel(pm);
+                if (loadedLabel == null && appInfo != null) {
+                    loadedLabel = pm.getApplicationLabel(appInfo);
+                }
+                String label = loadedLabel == null
+                        ? packageName
+                        : loadedLabel.toString();
 
-                CharSequence loadedLabel =
-                        appInfo == null
-                                ? chosen.loadLabel(pm)
-                                : pm.getApplicationLabel(appInfo);
-                String label =
-                        loadedLabel == null
-                                ? packageName
-                                : loadedLabel.toString();
-
-                Drawable icon =
-                        appInfo == null
-                                ? chosen.loadIcon(pm)
-                                : pm.getApplicationIcon(appInfo);
+                Drawable icon = chosen.loadIcon(pm);
+                if (icon == null && appInfo != null) {
+                    icon = pm.getApplicationIcon(appInfo);
+                }
+                if (icon == null) {
+                    icon = pm.getDefaultActivityIcon();
+                }
 
                 apps.add(new AppEntry(
                         packageName,
                         component,
                         label,
                         icon,
-                        isPackageEnabled(pm, packageName)));
-            } catch (PackageManager.NameNotFoundException
-                    | RuntimeException ignored) {
+                        isActivityEnabled(pm, activityInfo)));
+            } catch (PackageManager.NameNotFoundException | RuntimeException ignored) {
             }
         }
 
-        Collator collator =
-                Collator.getInstance(Locale.getDefault());
+        Collator collator = Collator.getInstance(Locale.getDefault());
         apps.sort((left, right) -> {
-            int labelResult =
-                    collator.compare(left.label, right.label);
-            return labelResult != 0
-                    ? labelResult
-                    : left.packageName.compareTo(right.packageName);
+            int labelResult = collator.compare(left.label, right.label);
+            if (labelResult != 0) {
+                return labelResult;
+            }
+            int packageResult = left.packageName.compareTo(right.packageName);
+            return packageResult != 0
+                    ? packageResult
+                    : left.component.getClassName().compareTo(right.component.getClassName());
         });
         return apps;
     }
@@ -1216,9 +1270,7 @@ public final class DrawerWidget {
         return pm.getApplicationInfo(packageName, (int) flags);
     }
 
-    private static int candidateScore(
-            PackageManager pm,
-            ResolveInfo candidate) {
+    private static int candidateScore(PackageManager pm, ResolveInfo candidate) {
         ActivityInfo info = candidate.activityInfo;
         if (info == null) {
             return Integer.MIN_VALUE;
@@ -1229,29 +1281,17 @@ public final class DrawerWidget {
             score += 100;
         }
 
-        Intent direct =
-                pm.getLaunchIntentForPackage(info.packageName);
+        Intent direct = pm.getLaunchIntentForPackage(info.packageName);
         if (direct != null
                 && direct.getComponent() != null
-                && direct.getComponent().getClassName().equals(info.name)) {
+                && direct.getComponent().equals(new ComponentName(info.packageName, info.name))) {
             score += 50;
-        }
-
-        String name =
-                info.name == null
-                        ? ""
-                        : info.name.toLowerCase(Locale.ROOT);
-        if (name.contains("launcher")
-                || name.contains("main")) {
-            score += 5;
         }
         return score;
     }
 
-    private static boolean isActivityEnabled(
-            PackageManager pm,
-            ActivityInfo info) {
-        if (info == null) {
+    private static boolean isActivityEnabled(PackageManager pm, ActivityInfo info) {
+        if (info == null || info.name == null) {
             return false;
         }
 
@@ -1261,24 +1301,17 @@ public final class DrawerWidget {
         }
 
         try {
-            int appSetting =
-                    pm.getApplicationEnabledSetting(info.packageName);
-            int componentSetting =
-                    pm.getComponentEnabledSetting(
-                            new ComponentName(
-                                    info.packageName,
-                                    info.name));
+            int appSetting = pm.getApplicationEnabledSetting(info.packageName);
+            int componentSetting = pm.getComponentEnabledSetting(
+                    new ComponentName(info.packageName, info.name));
 
-            enabled &= appSetting
-                    != PackageManager.COMPONENT_ENABLED_STATE_DISABLED;
-            enabled &= appSetting
-                    != PackageManager.COMPONENT_ENABLED_STATE_DISABLED_USER;
-            enabled &= appSetting
+            enabled &= appSetting != PackageManager.COMPONENT_ENABLED_STATE_DISABLED;
+            enabled &= appSetting != PackageManager.COMPONENT_ENABLED_STATE_DISABLED_USER;
+            enabled &= appSetting != PackageManager.COMPONENT_ENABLED_STATE_DISABLED_UNTIL_USED;
+            enabled &= componentSetting != PackageManager.COMPONENT_ENABLED_STATE_DISABLED;
+            enabled &= componentSetting != PackageManager.COMPONENT_ENABLED_STATE_DISABLED_USER;
+            enabled &= componentSetting
                     != PackageManager.COMPONENT_ENABLED_STATE_DISABLED_UNTIL_USED;
-            enabled &= componentSetting
-                    != PackageManager.COMPONENT_ENABLED_STATE_DISABLED;
-            enabled &= componentSetting
-                    != PackageManager.COMPONENT_ENABLED_STATE_DISABLED_USER;
         } catch (IllegalArgumentException ignored) {
             return false;
         }
@@ -1286,93 +1319,59 @@ public final class DrawerWidget {
         return enabled;
     }
 
-    private static boolean isPackageEnabled(
-            PackageManager pm,
-            String packageName) {
-        try {
-            ApplicationInfo info =
-                    getApplicationInfoIncludingDisabled(
-                            pm,
-                            packageName);
-            boolean enabled = info.enabled;
-            int setting =
-                    pm.getApplicationEnabledSetting(packageName);
-            enabled &= setting
-                    != PackageManager.COMPONENT_ENABLED_STATE_DISABLED;
-            enabled &= setting
-                    != PackageManager.COMPONENT_ENABLED_STATE_DISABLED_USER;
-            enabled &= setting
-                    != PackageManager.COMPONENT_ENABLED_STATE_DISABLED_UNTIL_USED;
-            return enabled;
-        } catch (PackageManager.NameNotFoundException
-                | IllegalArgumentException ignored) {
-            return false;
-        }
-    }
-
-    private static Bitmap iconBitmap(
-            Context context,
-            Drawable drawable) {
+    private static Bitmap iconBitmap(Context context, Drawable drawable) {
         int size = Math.max(1, dp(context, 48));
-        Bitmap bitmap =
-                Bitmap.createBitmap(
-                        size,
-                        size,
-                        Bitmap.Config.ARGB_8888);
+        Bitmap bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(bitmap);
         drawable.setBounds(0, 0, size, size);
         drawable.draw(canvas);
         return bitmap;
     }
 
-    private static void launchEntry(
-            Context context,
-            AppEntry entry) {
+    private static void launchEntry(Context context, AppEntry entry) {
         if (usesRootFreeze(context, entry.packageName)) {
-            launchWithRootFreeze(
-                    context,
-                    entry.packageName,
-                    entry.label);
+            launchWithRootFreeze(context, entry.packageName, entry.label);
         } else {
-            launchNormally(
-                    context,
-                    entry.packageName,
-                    entry.component);
+            launchNormally(context, entry.packageName, entry.component);
         }
     }
 
     private static void launchNormally(
             Context context,
             String packageName,
-            ComponentName fallbackComponent) {
-        try {
-            PackageManager pm =
-                    context.getPackageManager();
-            Intent intent =
-                    pm.getLaunchIntentForPackage(packageName);
-            if (intent == null && fallbackComponent != null) {
-                intent = Intent.makeMainActivity(fallbackComponent);
-            }
-            if (intent == null) {
-                Toast.makeText(
-                                context,
-                                "App is disabled. Select it under Root-freeze apps.",
-                                Toast.LENGTH_LONG)
-                        .show();
-                return;
-            }
+            ComponentName requestedComponent) {
+        PackageManager pm = context.getPackageManager();
+        Intent packageIntent = pm.getLaunchIntentForPackage(packageName);
+        Intent explicitIntent = requestedComponent == null
+                ? null
+                : Intent.makeMainActivity(requestedComponent);
 
-            intent.addFlags(
-                    Intent.FLAG_ACTIVITY_NEW_TASK
-                            | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
+        if (startLaunchIntent(context, explicitIntent)) {
+            return;
+        }
+        if (startLaunchIntent(context, packageIntent)) {
+            return;
+        }
+
+        Toast.makeText(
+                        context,
+                        "Unable to open app. Select it under Root-freeze apps if frozen.",
+                        Toast.LENGTH_LONG)
+                .show();
+    }
+
+    private static boolean startLaunchIntent(Context context, Intent intent) {
+        if (intent == null) {
+            return false;
+        }
+        intent.addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK
+                        | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
+        try {
             context.startActivity(intent);
-        } catch (ActivityNotFoundException
-                | SecurityException error) {
-            Toast.makeText(
-                            context,
-                            "Unable to open app. Select it under Root-freeze apps if frozen.",
-                            Toast.LENGTH_LONG)
-                    .show();
+            return true;
+        } catch (ActivityNotFoundException | SecurityException ignored) {
+            return false;
         }
     }
 
@@ -1381,26 +1380,18 @@ public final class DrawerWidget {
             String packageName,
             String label) {
         Intent proxy = new Intent();
-        proxy.setComponent(
-                new ComponentName(
-                        FREEZE_PACKAGE,
-                        FREEZE_PROXY));
-        proxy.putExtra(
-                FREEZE_EXTRA_PACKAGE,
-                packageName);
+        proxy.setComponent(new ComponentName(FREEZE_PACKAGE, FREEZE_PROXY));
+        proxy.putExtra(FREEZE_EXTRA_PACKAGE, packageName);
         proxy.putExtra(
                 FREEZE_EXTRA_LABEL,
-                label == null || label.trim().isEmpty()
-                        ? packageName
-                        : label);
+                label == null || label.trim().isEmpty() ? packageName : label);
         proxy.addFlags(
                 Intent.FLAG_ACTIVITY_NEW_TASK
                         | Intent.FLAG_ACTIVITY_CLEAR_TOP);
 
         try {
             context.startActivity(proxy);
-        } catch (ActivityNotFoundException
-                | SecurityException error) {
+        } catch (ActivityNotFoundException | SecurityException error) {
             Toast.makeText(
                             context,
                             "Install or update Root Freeze Shortcuts first",
@@ -1409,10 +1400,16 @@ public final class DrawerWidget {
         }
     }
 
+    private static boolean isValidComponent(ComponentName component) {
+        return component != null
+                && isValidPackageName(component.getPackageName())
+                && component.getClassName() != null
+                && !component.getClassName().trim().isEmpty();
+    }
+
     private static boolean isValidPackageName(String packageName) {
         return packageName != null
-                && packageName.matches(
-                        "[A-Za-z0-9_]+(?:\\.[A-Za-z0-9_]+)+");
+                && packageName.matches("[A-Za-z0-9_]+(?:\\.[A-Za-z0-9_]+)+");
     }
 
     private static LinearLayout verticalRoot(Context context) {
@@ -1427,29 +1424,20 @@ public final class DrawerWidget {
         return root;
     }
 
-    private static TextView titleView(
-            Context context,
-            String text) {
+    private static TextView titleView(Context context, String text) {
         TextView title = new TextView(context);
         title.setText(text);
         title.setTextColor(0xFFFFFFFF);
         title.setTextSize(22f);
         title.setGravity(Gravity.CENTER_VERTICAL);
-        title.setPadding(
-                dp(context, 8),
-                0,
-                dp(context, 8),
-                0);
-        title.setLayoutParams(
-                new LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        dp(context, 56)));
+        title.setPadding(dp(context, 8), 0, dp(context, 8), 0);
+        title.setLayoutParams(new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(context, 56)));
         return title;
     }
 
-    private static Button actionButton(
-            Context context,
-            String text) {
+    private static Button actionButton(Context context, String text) {
         Button button = new Button(context);
         button.setText(text);
         button.setAllCaps(false);
@@ -1465,9 +1453,6 @@ public final class DrawerWidget {
 
     private static int dp(Context context, int value) {
         return Math.round(
-                value
-                        * context.getResources()
-                        .getDisplayMetrics()
-                        .density);
+                value * context.getResources().getDisplayMetrics().density);
     }
 }
