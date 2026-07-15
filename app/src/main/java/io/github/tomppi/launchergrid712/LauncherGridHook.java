@@ -11,6 +11,7 @@ import android.view.ViewConfiguration;
 import android.view.ViewGroup;
 import android.view.ViewTreeObserver;
 
+import java.lang.ref.WeakReference;
 import java.util.Collections;
 import java.util.Map;
 import java.util.Set;
@@ -41,8 +42,6 @@ public final class LauncherGridHook implements IXposedHookLoadPackage {
             "com.android.launcher3.AppWidgetResizeFrame";
 
     private static final String DRAWER_WIDGET_PACKAGE = "io.github.tomppi.drawerwidget";
-    private static final String DRAWER_WIDGET_PROVIDER =
-            "io.github.tomppi.drawerwidget.DrawerWidget$Provider";
     private static final String ACTION_FAVORITES_NEXT =
             "io.github.tomppi.drawerwidget.action.FAVORITES_NEXT";
     private static final String ACTION_FAVORITES_PREVIOUS =
@@ -63,8 +62,14 @@ public final class LauncherGridHook implements IXposedHookLoadPackage {
 
     private static final Map<View, Boolean> SWIPE_LISTENERS =
             Collections.synchronizedMap(new WeakHashMap<>());
-    private static final Map<AppWidgetHostView, ViewTreeObserver.OnGlobalLayoutListener>
-            HOST_LAYOUT_LISTENERS =
+
+    /**
+     * Weak keys alone are not sufficient when a map value strongly captures its key. Each binding
+     * therefore keeps only a WeakReference to its host. The host owns the attach-state listener and
+     * the ViewTreeObserver owns it while attached, so no static strong path keeps old Launcher view
+     * trees alive.
+     */
+    private static final Map<AppWidgetHostView, FavoritesHostBinding> HOST_BINDINGS =
             Collections.synchronizedMap(new WeakHashMap<>());
 
     private static volatile boolean gridAppliedLogWritten;
@@ -108,8 +113,7 @@ public final class LauncherGridHook implements IXposedHookLoadPackage {
                             }
 
                             Object displayOption = param.args[1];
-                            Object gridOption =
-                                    XposedHelpers.getObjectField(displayOption, "grid");
+                            Object gridOption = XposedHelpers.getObjectField(displayOption, "grid");
 
                             XposedHelpers.setIntField(
                                     gridOption,
@@ -141,7 +145,7 @@ public final class LauncherGridHook implements IXposedHookLoadPackage {
     }
 
     /**
-     * Relaxes the widget provider metadata after Launcher3 calculates spans from the widget manifest.
+     * Relaxes every widget provider's metadata after Launcher3 calculates spans from its manifest.
      * The stock foldable two-panel page model is not changed.
      */
     private static void installWidgetMetadataHook(ClassLoader classLoader) {
@@ -189,7 +193,7 @@ public final class LauncherGridHook implements IXposedHookLoadPackage {
         logHookResult(hooks, "LauncherAppWidgetProviderInfo.initSpans");
     }
 
-    /** Applies the same limits directly to the active resize frame as a compatibility fallback. */
+    /** Applies the same global limits directly to the active resize frame as a fallback. */
     private static void installWidgetResizeFrameHook(ClassLoader classLoader) {
         final Class<?> resizeFrameClass;
         try {
@@ -269,17 +273,74 @@ public final class LauncherGridHook implements IXposedHookLoadPackage {
     private static void attachFavoritesSwipeSupport(AppWidgetHostView host) {
         attachToCurrentFavoritesTree(host);
 
-        synchronized (HOST_LAYOUT_LISTENERS) {
-            if (HOST_LAYOUT_LISTENERS.containsKey(host)) {
+        synchronized (HOST_BINDINGS) {
+            FavoritesHostBinding existing = HOST_BINDINGS.get(host);
+            if (existing != null) {
+                existing.ensureGlobalLayoutListener();
                 return;
             }
 
-            ViewTreeObserver.OnGlobalLayoutListener listener =
-                    () -> attachToCurrentFavoritesTree(host);
+            FavoritesHostBinding binding = new FavoritesHostBinding(host);
+            HOST_BINDINGS.put(host, binding);
+            host.addOnAttachStateChangeListener(binding);
+            binding.ensureGlobalLayoutListener();
+        }
+    }
+
+    private static final class FavoritesHostBinding
+            implements ViewTreeObserver.OnGlobalLayoutListener, View.OnAttachStateChangeListener {
+        private final WeakReference<AppWidgetHostView> hostReference;
+        private boolean globalLayoutListenerRegistered;
+
+        FavoritesHostBinding(AppWidgetHostView host) {
+            hostReference = new WeakReference<>(host);
+        }
+
+        void ensureGlobalLayoutListener() {
+            AppWidgetHostView host = hostReference.get();
+            if (host == null || globalLayoutListenerRegistered) {
+                return;
+            }
             ViewTreeObserver observer = host.getViewTreeObserver();
             if (observer.isAlive()) {
-                observer.addOnGlobalLayoutListener(listener);
-                HOST_LAYOUT_LISTENERS.put(host, listener);
+                observer.addOnGlobalLayoutListener(this);
+                globalLayoutListenerRegistered = true;
+            }
+        }
+
+        private void removeGlobalLayoutListener(AppWidgetHostView host) {
+            if (!globalLayoutListenerRegistered) {
+                return;
+            }
+            ViewTreeObserver observer = host.getViewTreeObserver();
+            if (observer.isAlive()) {
+                observer.removeOnGlobalLayoutListener(this);
+            }
+            globalLayoutListenerRegistered = false;
+        }
+
+        @Override
+        public void onGlobalLayout() {
+            AppWidgetHostView host = hostReference.get();
+            if (host != null) {
+                attachToCurrentFavoritesTree(host);
+            }
+        }
+
+        @Override
+        public void onViewAttachedToWindow(View view) {
+            AppWidgetHostView host = hostReference.get();
+            if (host != null) {
+                ensureGlobalLayoutListener();
+                attachToCurrentFavoritesTree(host);
+            }
+        }
+
+        @Override
+        public void onViewDetachedFromWindow(View view) {
+            AppWidgetHostView host = hostReference.get();
+            if (host != null) {
+                removeGlobalLayoutListener(host);
             }
         }
     }
@@ -351,8 +412,7 @@ public final class LauncherGridHook implements IXposedHookLoadPackage {
         }
     }
 
-    private static final class HorizontalFavoritesSwipeListener
-            implements View.OnTouchListener {
+    private static final class HorizontalFavoritesSwipeListener implements View.OnTouchListener {
         private final AppWidgetHostView host;
         private float downX;
         private float downY;
@@ -426,10 +486,8 @@ public final class LauncherGridHook implements IXposedHookLoadPackage {
             Intent intent = new Intent(action);
             intent.setComponent(new ComponentName(
                     DRAWER_WIDGET_PACKAGE,
-                    DRAWER_WIDGET_PROVIDER));
-            intent.putExtra(
-                    AppWidgetManager.EXTRA_APPWIDGET_ID,
-                    appWidgetId);
+                    DRAWER_WIDGET_PACKAGE + ".DrawerWidget$Provider"));
+            intent.putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId);
             host.getContext().sendBroadcast(intent);
         }
 
@@ -440,8 +498,7 @@ public final class LauncherGridHook implements IXposedHookLoadPackage {
         }
 
         private static int dp(View view, int value) {
-            return Math.round(
-                    value * view.getResources().getDisplayMetrics().density);
+            return Math.round(value * view.getResources().getDisplayMetrics().density);
         }
     }
 
