@@ -8,6 +8,11 @@ on:
       - 'split-widgets.trigger'
       - 'tools/split_widgets.py'
       - '.github/workflows/build-drawer-widget.yml'
+  pull_request:
+    paths:
+      - 'split-widgets.trigger'
+      - 'tools/split_widgets.py'
+      - '.github/workflows/build-drawer-widget.yml'
 
 jobs:
   build:
