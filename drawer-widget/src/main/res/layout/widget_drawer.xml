@@ -7,46 +7,26 @@
     android:clipToPadding="true"
     android:orientation="vertical"
     android:padding="12dp">
-
-    <LinearLayout
+    <TextView
+        android:id="@+id/search_bar"
         android:layout_width="match_parent"
         android:layout_height="46dp"
-        android:clipChildren="true"
+        android:background="@drawable/search_background"
         android:gravity="center_vertical"
-        android:orientation="horizontal">
-
-        <TextView
-            android:id="@+id/search_bar"
-            android:layout_width="0dp"
-            android:layout_height="46dp"
-            android:layout_weight="1"
-            android:background="@drawable/search_background"
-            android:gravity="center_vertical"
-            android:paddingStart="16dp"
-            android:paddingEnd="16dp"
-            android:text="⌕  Search apps"
-            android:textColor="#CFCFCF"
-            android:textSize="16sp" />
-
-        <TextView
-            android:id="@+id/edit_favorites"
-            android:layout_width="46dp"
-            android:layout_height="46dp"
-            android:gravity="center"
-            android:text="✎"
-            android:textColor="#FFFFFF"
-            android:textSize="21sp" />
-    </LinearLayout>
-
+        android:paddingStart="16dp"
+        android:paddingEnd="16dp"
+        android:text="⌕  Search apps"
+        android:textColor="#CFCFCF"
+        android:textSize="16sp" />
     <FrameLayout
         android:id="@+id/all_apps_clip_container"
         android:layout_width="match_parent"
         android:layout_height="0dp"
+        android:layout_marginTop="8dp"
         android:layout_weight="1"
         android:background="#303030"
         android:clipChildren="true"
         android:clipToPadding="true">
-
         <GridView
             android:id="@+id/all_apps_grid"
             android:layout_width="match_parent"
@@ -62,70 +42,4 @@
             android:stretchMode="columnWidth"
             android:verticalSpacing="0dp" />
     </FrameLayout>
-
-    <LinearLayout
-        android:id="@+id/favorites_panel"
-        android:layout_width="match_parent"
-        android:layout_height="271dp"
-        android:background="#303030"
-        android:clipChildren="true"
-        android:clipToPadding="true"
-        android:elevation="8dp"
-        android:orientation="vertical">
-
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="1dp"
-            android:layout_marginTop="4dp"
-            android:layout_marginBottom="4dp"
-            android:background="#4A4A4A"
-            android:text="" />
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="34dp"
-            android:clipChildren="true"
-            android:gravity="center_vertical"
-            android:orientation="horizontal">
-
-            <TextView
-                android:layout_width="0dp"
-                android:layout_height="match_parent"
-                android:layout_weight="1"
-                android:gravity="center_vertical"
-                android:text="★  FAVORITES"
-                android:textColor="#FFFFFF"
-                android:textSize="13sp"
-                android:textStyle="bold" />
-
-            <TextView
-                android:id="@+id/favorites_page_indicator"
-                android:layout_width="wrap_content"
-                android:layout_height="match_parent"
-                android:gravity="center_vertical"
-                android:text="Swipe ↔"
-                android:textColor="#9E9E9E"
-                android:textSize="11sp" />
-        </LinearLayout>
-
-        <FrameLayout
-            android:layout_width="match_parent"
-            android:layout_height="228dp"
-            android:background="#303030"
-            android:clipChildren="true"
-            android:clipToPadding="true">
-
-            <include layout="@layout/widget_favorites_page" />
-
-            <TextView
-                android:id="@+id/empty_favorites"
-                android:layout_width="match_parent"
-                android:layout_height="match_parent"
-                android:background="#303030"
-                android:gravity="center"
-                android:text="Tap ✎ to add favorite apps"
-                android:textColor="#BDBDBD"
-                android:textSize="14sp" />
-        </FrameLayout>
-    </LinearLayout>
 </LinearLayout>

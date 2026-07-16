@@ -104,12 +104,23 @@ public final class DrawerWidget {
 
     private DrawerWidget() {}
 
+    /** Original widget: search plus the vertically scrolling All Apps grid only. */
     public static final class Provider extends AppWidgetProvider {
+        @Override
+        public void onUpdate(Context context, AppWidgetManager manager, int[] appWidgetIds) {
+            for (int appWidgetId : appWidgetIds) {
+                updateAllAppsWidget(context, manager, appWidgetId);
+            }
+        }
+    }
+
+    /** Separate widget that shares the same Favorites, order, paging, and Root Freeze settings. */
+    public static final class FavoritesProvider extends AppWidgetProvider {
         @Override
         public void onUpdate(Context context, AppWidgetManager manager, int[] appWidgetIds) {
             List<AppEntry> favorites = loadFavoriteEntries(context);
             for (int appWidgetId : appWidgetIds) {
-                updateWidget(context, manager, appWidgetId, favorites);
+                updateFavoritesWidget(context, manager, appWidgetId, favorites);
             }
         }
 
@@ -753,33 +764,40 @@ public final class DrawerWidget {
         }
     }
 
-    private static void updateWidget(
+    private static void updateAllAppsWidget(
             Context context,
             AppWidgetManager manager,
-            int appWidgetId,
-            List<AppEntry> favorites) {
+            int appWidgetId) {
         RemoteViews views = new RemoteViews(
                 context.getPackageName(),
                 R.layout.widget_drawer);
-
         bindAllApps(context, views, appWidgetId);
-        bindFavoritesPage(context, views, appWidgetId, favorites);
-
         views.setOnClickPendingIntent(
                 R.id.search_bar,
                 activityPendingIntent(
                         context,
                         SearchActivity.class,
                         appWidgetId * 10 + 1));
+        manager.updateAppWidget(appWidgetId, views);
+        manager.notifyAppWidgetViewDataChanged(appWidgetId, R.id.all_apps_grid);
+    }
+
+    private static void updateFavoritesWidget(
+            Context context,
+            AppWidgetManager manager,
+            int appWidgetId,
+            List<AppEntry> favorites) {
+        RemoteViews views = new RemoteViews(
+                context.getPackageName(),
+                R.layout.widget_favorites_only);
+        bindFavoritesPage(context, views, appWidgetId, favorites);
         views.setOnClickPendingIntent(
                 R.id.edit_favorites,
                 activityPendingIntent(
                         context,
                         FavoritesActivity.class,
                         appWidgetId * 10 + 2));
-
         manager.updateAppWidget(appWidgetId, views);
-        manager.notifyAppWidgetViewDataChanged(appWidgetId, R.id.all_apps_grid);
     }
 
     private static void bindAllApps(
@@ -901,10 +919,18 @@ public final class DrawerWidget {
 
     private static void refreshAllWidgets(Context context) {
         AppWidgetManager manager = AppWidgetManager.getInstance(context);
-        int[] ids = manager.getAppWidgetIds(new ComponentName(context, Provider.class));
-        List<AppEntry> favorites = loadFavoriteEntries(context);
-        for (int id : ids) {
-            updateWidget(context, manager, id, favorites);
+        int[] allAppsIds = manager.getAppWidgetIds(new ComponentName(context, Provider.class));
+        for (int id : allAppsIds) {
+            updateAllAppsWidget(context, manager, id);
+        }
+
+        int[] favoriteIds = manager.getAppWidgetIds(
+                new ComponentName(context, FavoritesProvider.class));
+        if (favoriteIds.length > 0) {
+            List<AppEntry> favorites = loadFavoriteEntries(context);
+            for (int id : favoriteIds) {
+                updateFavoritesWidget(context, manager, id, favorites);
+            }
         }
     }
 
@@ -914,7 +940,7 @@ public final class DrawerWidget {
             List<AppEntry> favorites) {
         RemoteViews partial = new RemoteViews(
                 context.getPackageName(),
-                R.layout.widget_drawer);
+                R.layout.widget_favorites_only);
         bindFavoritesPage(context, partial, appWidgetId, favorites);
         AppWidgetManager.getInstance(context)
                 .partiallyUpdateAppWidget(appWidgetId, partial);
@@ -922,7 +948,8 @@ public final class DrawerWidget {
 
     private static void refreshFavoritesWidgets(Context context, boolean resetPages) {
         AppWidgetManager manager = AppWidgetManager.getInstance(context);
-        int[] ids = manager.getAppWidgetIds(new ComponentName(context, Provider.class));
+        int[] ids = manager.getAppWidgetIds(
+                new ComponentName(context, FavoritesProvider.class));
         List<AppEntry> favorites = loadFavoriteEntries(context);
         for (int id : ids) {
             if (resetPages) {
@@ -930,7 +957,7 @@ public final class DrawerWidget {
             }
             RemoteViews partial = new RemoteViews(
                     context.getPackageName(),
-                    R.layout.widget_drawer);
+                    R.layout.widget_favorites_only);
             bindFavoritesPage(context, partial, id, favorites);
             manager.partiallyUpdateAppWidget(id, partial);
         }

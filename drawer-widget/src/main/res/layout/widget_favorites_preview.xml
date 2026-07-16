@@ -4,29 +4,23 @@
     android:layout_height="match_parent"
     android:background="@drawable/widget_background"
     android:orientation="vertical"
-    android:padding="12dp">
+    android:padding="10dp">
     <TextView
         android:layout_width="match_parent"
-        android:layout_height="46dp"
-        android:background="@drawable/search_background"
+        android:layout_height="38dp"
         android:gravity="center_vertical"
-        android:paddingStart="16dp"
-        android:paddingEnd="16dp"
-        android:text="⌕  Search apps"
-        android:textColor="#CFCFCF"
-        android:textSize="16sp" />
+        android:text="★  FAVORITES                         Swipe ↔   ✎"
+        android:textColor="#FFFFFF"
+        android:textSize="13sp"
+        android:textStyle="bold" />
     <TextView
         android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_marginTop="8dp"
-        android:layout_weight="1"
+        android:layout_height="228dp"
         android:background="#303030"
         android:gravity="center"
-        android:text="ALL APPS
-
-6 columns
-Fills all available space
-Vertically scrollable"
+        android:text="18 favorites per page
+6 columns × 3 rows
+Continuous horizontal paging"
         android:textAlignment="center"
         android:textColor="#F2F2F2"
         android:textSize="15sp" />

@@ -483,10 +483,15 @@ public final class LauncherGridHook implements IXposedHookLoadPackage {
                 return;
             }
 
+            AppWidgetProviderInfo info = host.getAppWidgetInfo();
+            ComponentName provider = info == null ? null : info.provider;
+            if (provider == null
+                    || !DRAWER_WIDGET_PACKAGE.equals(provider.getPackageName())) {
+                return;
+            }
+
             Intent intent = new Intent(action);
-            intent.setComponent(new ComponentName(
-                    DRAWER_WIDGET_PACKAGE,
-                    DRAWER_WIDGET_PACKAGE + ".DrawerWidget$Provider"));
+            intent.setComponent(provider);
             intent.putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId);
             host.getContext().sendBroadcast(intent);
         }

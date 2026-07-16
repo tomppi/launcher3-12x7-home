@@ -19,13 +19,26 @@
 
         <receiver
             android:name=".DrawerWidget$Provider"
-            android:exported="true">
+            android:exported="true"
+            android:label="All Apps Widget">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
             </intent-filter>
             <meta-data
                 android:name="android.appwidget.provider"
                 android:resource="@xml/drawer_widget_info" />
+        </receiver>
+
+        <receiver
+            android:name=".DrawerWidget$FavoritesProvider"
+            android:exported="true"
+            android:label="Favorites Widget">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/favorites_widget_info" />
         </receiver>
 
         <receiver
