@@ -28,7 +28,17 @@ jobs:
           fetch-depth: 0
 
       - name: Split All Apps and Favorites widgets
-        run: python3 tools/split_widgets.py
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('tools/split_widgets.py')
+          text = path.read_text()
+          start = text.index('Path(".github/workflows/build-drawer-widget.yml").write_text')
+          end = text.index('Path("split-widgets.trigger")', start)
+          path.write_text(text[:start] + text[end:])
+          PY
+          python3 tools/split_widgets.py
 
       - name: Commit widget split
         shell: bash
