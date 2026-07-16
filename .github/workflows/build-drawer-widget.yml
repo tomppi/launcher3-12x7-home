@@ -5,49 +5,26 @@ on:
   push:
     branches: [ feature/app-drawer-widget ]
     paths:
-      - 'split-widgets.trigger'
-      - 'tools/split_widgets.py'
+      - 'drawer-widget/**'
+      - 'settings.gradle.kts'
+      - 'build.gradle.kts'
       - '.github/workflows/build-drawer-widget.yml'
   pull_request:
     paths:
-      - 'split-widgets.trigger'
-      - 'tools/split_widgets.py'
+      - 'drawer-widget/**'
+      - 'settings.gradle.kts'
+      - 'build.gradle.kts'
       - '.github/workflows/build-drawer-widget.yml'
 
 jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          ref: feature/app-drawer-widget
-          fetch-depth: 0
-
-      - name: Split All Apps and Favorites widgets
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          path = Path('tools/split_widgets.py')
-          text = path.read_text()
-          start = text.index('Path(".github/workflows/build-drawer-widget.yml").write_text')
-          end = text.index('Path("split-widgets.trigger")', start)
-          path.write_text(text[:start] + text[end:])
-          PY
-          python3 tools/split_widgets.py
-
-      - name: Commit widget split
-        shell: bash
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "Split All Apps and Favorites widgets"
-          git push origin HEAD:feature/app-drawer-widget
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -62,3 +39,10 @@ jobs:
 
       - name: Build drawer widget APK
         run: gradle --no-daemon :drawer-widget:assembleDebug
+
+      - name: Upload drawer widget APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: q5q-app-drawer-widget
+          path: drawer-widget/build/outputs/apk/debug/drawer-widget-debug.apk
+          if-no-files-found: error
