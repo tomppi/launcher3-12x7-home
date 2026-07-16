@@ -17,3 +17,4 @@ dependencyResolutionManagement {
 rootProject.name = "Q5QLauncherGrid7x12"
 include(":app")
 include(":xposed-stubs")
+include(":drawer-widget")

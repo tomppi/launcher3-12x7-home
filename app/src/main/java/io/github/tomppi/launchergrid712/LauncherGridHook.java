@@ -1,6 +1,21 @@
 package io.github.tomppi.launchergrid712;
 
+import android.appwidget.AppWidgetHostView;
+import android.appwidget.AppWidgetManager;
+import android.appwidget.AppWidgetProviderInfo;
+import android.content.ComponentName;
+import android.content.Intent;
+import android.view.MotionEvent;
+import android.view.View;
+import android.view.ViewConfiguration;
+import android.view.ViewGroup;
+import android.view.ViewTreeObserver;
+
+import java.lang.ref.WeakReference;
+import java.util.Collections;
+import java.util.Map;
 import java.util.Set;
+import java.util.WeakHashMap;
 
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
@@ -12,7 +27,8 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage;
  * LineageOS Launcher3 adjustments for the Samsung Galaxy Z Fold5 (q5q).
  *
  * <p>The module keeps Launcher3's stock foldable page model while changing the workspace grid and
- * widget resize limits. All Apps, folders, hotseat, taskbar, gestures, and Recents are deliberately
+ * widget resize limits. It also adds horizontal swipe paging to the companion Drawer Widget's
+ * static Favorites area. All Apps, folders, hotseat, taskbar, gestures, and Recents are otherwise
  * left alone.</p>
  */
 public final class LauncherGridHook implements IXposedHookLoadPackage {
@@ -25,6 +41,14 @@ public final class LauncherGridHook implements IXposedHookLoadPackage {
     private static final String WIDGET_RESIZE_FRAME_CLASS =
             "com.android.launcher3.AppWidgetResizeFrame";
 
+    private static final String DRAWER_WIDGET_PACKAGE = "io.github.tomppi.drawerwidget";
+    private static final String ACTION_FAVORITES_NEXT =
+            "io.github.tomppi.drawerwidget.action.FAVORITES_NEXT";
+    private static final String ACTION_FAVORITES_PREVIOUS =
+            "io.github.tomppi.drawerwidget.action.FAVORITES_PREVIOUS";
+    private static final String FAVORITES_VIEW_NAME = "favorites_touch_area";
+    private static final String FAVORITE_SLOT_PREFIX = "favorite_slot_";
+
     private static final int WORKSPACE_COLUMNS = 7;
     private static final int WORKSPACE_ROWS = 12;
 
@@ -36,9 +60,22 @@ public final class LauncherGridHook implements IXposedHookLoadPackage {
     private static final float MAX_WORKSPACE_ICON_DP = 42.0f;
     private static final float MAX_WORKSPACE_TEXT_SP = 10.5f;
 
+    private static final Map<View, Boolean> SWIPE_LISTENERS =
+            Collections.synchronizedMap(new WeakHashMap<>());
+
+    /**
+     * Weak keys alone are not sufficient when a map value strongly captures its key. Each binding
+     * therefore keeps only a WeakReference to its host. The host owns the attach-state listener and
+     * the ViewTreeObserver owns it while attached, so no static strong path keeps old Launcher view
+     * trees alive.
+     */
+    private static final Map<AppWidgetHostView, FavoritesHostBinding> HOST_BINDINGS =
+            Collections.synchronizedMap(new WeakHashMap<>());
+
     private static volatile boolean gridAppliedLogWritten;
     private static volatile boolean widgetMetadataLogWritten;
     private static volatile boolean widgetFrameLogWritten;
+    private static volatile boolean favoritesSwipeLogWritten;
 
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) {
@@ -49,6 +86,7 @@ public final class LauncherGridHook implements IXposedHookLoadPackage {
         installGridHook(lpparam.classLoader);
         installWidgetMetadataHook(lpparam.classLoader);
         installWidgetResizeFrameHook(lpparam.classLoader);
+        installDrawerFavoritesSwipeHook();
     }
 
     private static void installGridHook(ClassLoader classLoader) {
@@ -75,8 +113,7 @@ public final class LauncherGridHook implements IXposedHookLoadPackage {
                             }
 
                             Object displayOption = param.args[1];
-                            Object gridOption =
-                                    XposedHelpers.getObjectField(displayOption, "grid");
+                            Object gridOption = XposedHelpers.getObjectField(displayOption, "grid");
 
                             XposedHelpers.setIntField(
                                     gridOption,
@@ -108,7 +145,7 @@ public final class LauncherGridHook implements IXposedHookLoadPackage {
     }
 
     /**
-     * Relaxes the widget provider metadata after Launcher3 calculates spans from the widget manifest.
+     * Relaxes every widget provider's metadata after Launcher3 calculates spans from its manifest.
      * The stock foldable two-panel page model is not changed.
      */
     private static void installWidgetMetadataHook(ClassLoader classLoader) {
@@ -156,7 +193,7 @@ public final class LauncherGridHook implements IXposedHookLoadPackage {
         logHookResult(hooks, "LauncherAppWidgetProviderInfo.initSpans");
     }
 
-    /** Applies the same limits directly to the active resize frame as a compatibility fallback. */
+    /** Applies the same global limits directly to the active resize frame as a fallback. */
     private static void installWidgetResizeFrameHook(ClassLoader classLoader) {
         final Class<?> resizeFrameClass;
         try {
@@ -193,6 +230,281 @@ public final class LauncherGridHook implements IXposedHookLoadPackage {
                 });
 
         logHookResult(hooks, "AppWidgetResizeFrame.setupForWidget");
+    }
+
+    /**
+     * The Drawer Widget renders Favorites as a static 6x3 page. This Launcher3-side hook maps
+     * left/right gestures over that page to explicit broadcasts that change the stored page index.
+     */
+    private static void installDrawerFavoritesSwipeHook() {
+        Set<XC_MethodHook.Unhook> hooks = XposedBridge.hookAllMethods(
+                AppWidgetHostView.class,
+                "updateAppWidget",
+                new XC_MethodHook() {
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) {
+                        if (!(param.thisObject instanceof AppWidgetHostView)) {
+                            return;
+                        }
+
+                        AppWidgetHostView host = (AppWidgetHostView) param.thisObject;
+                        if (!isDrawerWidgetHost(host)) {
+                            return;
+                        }
+
+                        host.post(() -> attachFavoritesSwipeSupport(host));
+                    }
+                });
+
+        logHookResult(hooks, "AppWidgetHostView.updateAppWidget");
+    }
+
+    private static boolean isDrawerWidgetHost(AppWidgetHostView host) {
+        try {
+            AppWidgetProviderInfo info = host.getAppWidgetInfo();
+            return info != null
+                    && info.provider != null
+                    && DRAWER_WIDGET_PACKAGE.equals(info.provider.getPackageName());
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    private static void attachFavoritesSwipeSupport(AppWidgetHostView host) {
+        attachToCurrentFavoritesTree(host);
+
+        synchronized (HOST_BINDINGS) {
+            FavoritesHostBinding existing = HOST_BINDINGS.get(host);
+            if (existing != null) {
+                existing.ensureGlobalLayoutListener();
+                return;
+            }
+
+            FavoritesHostBinding binding = new FavoritesHostBinding(host);
+            HOST_BINDINGS.put(host, binding);
+            host.addOnAttachStateChangeListener(binding);
+            binding.ensureGlobalLayoutListener();
+        }
+    }
+
+    private static final class FavoritesHostBinding
+            implements ViewTreeObserver.OnGlobalLayoutListener, View.OnAttachStateChangeListener {
+        private final WeakReference<AppWidgetHostView> hostReference;
+        private boolean globalLayoutListenerRegistered;
+
+        FavoritesHostBinding(AppWidgetHostView host) {
+            hostReference = new WeakReference<>(host);
+        }
+
+        void ensureGlobalLayoutListener() {
+            AppWidgetHostView host = hostReference.get();
+            if (host == null || globalLayoutListenerRegistered) {
+                return;
+            }
+            ViewTreeObserver observer = host.getViewTreeObserver();
+            if (observer.isAlive()) {
+                observer.addOnGlobalLayoutListener(this);
+                globalLayoutListenerRegistered = true;
+            }
+        }
+
+        private void removeGlobalLayoutListener(AppWidgetHostView host) {
+            if (!globalLayoutListenerRegistered) {
+                return;
+            }
+            ViewTreeObserver observer = host.getViewTreeObserver();
+            if (observer.isAlive()) {
+                observer.removeOnGlobalLayoutListener(this);
+            }
+            globalLayoutListenerRegistered = false;
+        }
+
+        @Override
+        public void onGlobalLayout() {
+            AppWidgetHostView host = hostReference.get();
+            if (host != null) {
+                attachToCurrentFavoritesTree(host);
+            }
+        }
+
+        @Override
+        public void onViewAttachedToWindow(View view) {
+            AppWidgetHostView host = hostReference.get();
+            if (host != null) {
+                ensureGlobalLayoutListener();
+                attachToCurrentFavoritesTree(host);
+            }
+        }
+
+        @Override
+        public void onViewDetachedFromWindow(View view) {
+            AppWidgetHostView host = hostReference.get();
+            if (host != null) {
+                removeGlobalLayoutListener(host);
+            }
+        }
+    }
+
+    private static void attachToCurrentFavoritesTree(AppWidgetHostView host) {
+        View favorites = findViewByEntryName(host, FAVORITES_VIEW_NAME);
+        if (favorites == null) {
+            return;
+        }
+
+        attachSwipeListenersRecursively(favorites, host);
+
+        if (!favoritesSwipeLogWritten) {
+            favoritesSwipeLogWritten = true;
+            XposedBridge.log(
+                    TAG + ": horizontal Favorites swipe broadcasts attached to Drawer Widget");
+        }
+    }
+
+    private static void attachSwipeListenersRecursively(
+            View view,
+            AppWidgetHostView host) {
+        String name = resourceEntryName(view);
+        if (FAVORITES_VIEW_NAME.equals(name)
+                || (name != null && name.startsWith(FAVORITE_SLOT_PREFIX))) {
+            synchronized (SWIPE_LISTENERS) {
+                if (!SWIPE_LISTENERS.containsKey(view)) {
+                    view.setOnTouchListener(new HorizontalFavoritesSwipeListener(host));
+                    SWIPE_LISTENERS.put(view, Boolean.TRUE);
+                }
+            }
+        }
+
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) {
+                attachSwipeListenersRecursively(group.getChildAt(i), host);
+            }
+        }
+    }
+
+    private static View findViewByEntryName(View view, String wantedName) {
+        if (wantedName.equals(resourceEntryName(view))) {
+            return view;
+        }
+
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) {
+                View found = findViewByEntryName(group.getChildAt(i), wantedName);
+                if (found != null) {
+                    return found;
+                }
+            }
+        }
+        return null;
+    }
+
+    private static String resourceEntryName(View view) {
+        int id = view.getId();
+        if (id == View.NO_ID) {
+            return null;
+        }
+
+        try {
+            return view.getResources().getResourceEntryName(id);
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    private static final class HorizontalFavoritesSwipeListener implements View.OnTouchListener {
+        private final AppWidgetHostView host;
+        private float downX;
+        private float downY;
+        private boolean horizontalSwipe;
+
+        HorizontalFavoritesSwipeListener(AppWidgetHostView host) {
+            this.host = host;
+        }
+
+        @Override
+        public boolean onTouch(View view, MotionEvent event) {
+            switch (event.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    downX = event.getRawX();
+                    downY = event.getRawY();
+                    horizontalSwipe = false;
+                    requestNoParentIntercept(view, true);
+                    return false;
+
+                case MotionEvent.ACTION_MOVE:
+                    float moveX = event.getRawX() - downX;
+                    float moveY = event.getRawY() - downY;
+                    int slop = ViewConfiguration.get(view.getContext()).getScaledTouchSlop();
+                    if (Math.abs(moveX) > slop
+                            && Math.abs(moveX) > Math.abs(moveY) * 1.25f) {
+                        horizontalSwipe = true;
+                        requestNoParentIntercept(view, true);
+                        view.setPressed(false);
+                        return true;
+                    }
+                    return false;
+
+                case MotionEvent.ACTION_UP:
+                    requestNoParentIntercept(view, false);
+                    if (!horizontalSwipe) {
+                        return false;
+                    }
+
+                    float deltaX = event.getRawX() - downX;
+                    float deltaY = event.getRawY() - downY;
+                    int minimum = Math.max(
+                            dp(view, 42),
+                            ViewConfiguration.get(view.getContext()).getScaledTouchSlop() * 3);
+
+                    if (Math.abs(deltaX) >= minimum
+                            && Math.abs(deltaX) > Math.abs(deltaY) * 1.25f) {
+                        sendFavoritePageBroadcast(
+                                deltaX < 0
+                                        ? ACTION_FAVORITES_NEXT
+                                        : ACTION_FAVORITES_PREVIOUS);
+                    }
+                    view.setPressed(false);
+                    return true;
+
+                case MotionEvent.ACTION_CANCEL:
+                    requestNoParentIntercept(view, false);
+                    horizontalSwipe = false;
+                    return false;
+
+                default:
+                    return false;
+            }
+        }
+
+        private void sendFavoritePageBroadcast(String action) {
+            int appWidgetId = host.getAppWidgetId();
+            if (appWidgetId == AppWidgetManager.INVALID_APPWIDGET_ID) {
+                return;
+            }
+
+            AppWidgetProviderInfo info = host.getAppWidgetInfo();
+            ComponentName provider = info == null ? null : info.provider;
+            if (provider == null
+                    || !DRAWER_WIDGET_PACKAGE.equals(provider.getPackageName())) {
+                return;
+            }
+
+            Intent intent = new Intent(action);
+            intent.setComponent(provider);
+            intent.putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId);
+            host.getContext().sendBroadcast(intent);
+        }
+
+        private static void requestNoParentIntercept(View view, boolean disallow) {
+            if (view.getParent() != null) {
+                view.getParent().requestDisallowInterceptTouchEvent(disallow);
+            }
+        }
+
+        private static int dp(View view, int value) {
+            return Math.round(value * view.getResources().getDisplayMetrics().density);
+        }
     }
 
     private static void logHookResult(Set<XC_MethodHook.Unhook> hooks, String methodName) {
